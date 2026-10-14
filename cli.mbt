@@ -515,10 +515,11 @@ pub fn help_text() -> String {
     "  mcpbox.json, .mcpbox.json, config/mcpbox.json, .mcpbox/config.json,\n",
   )
   out.write_string(
-    "  ~/.config/mcpbox/config.json, plus servers imported from Cursor,\n",
+    "  ~/.mcpbox.json, ~/.config/mcpbox/config.json, plus servers imported from\n",
   )
   out.write_string(
-    "  Claude Code/Desktop, Windsurf and VS Code. Set MCPBOX_CONFIG to override.\n",
+    "  Cursor, Claude Code/Desktop, Windsurf and VS Code. Set MCPBOX_CONFIG to\n",
   )
+  out.write_string("  override.\n")
   out.to_string()
 }

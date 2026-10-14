@@ -77,6 +77,7 @@ fn config_candidates() -> Array[Candidate] {
       },
     })
   }
+  candidates.push({ path: "\{home}/.mcpbox.json", key: "mcpServers", })
   candidates.push({ path: "\{xdg}/mcpbox/config.json", key: "mcpServers", })
   candidates.push({ path: "\{home}/.cursor/mcp.json", key: "mcpServers", })
   candidates.push({ path: "\{home}/.claude.json", key: "mcpServers", })

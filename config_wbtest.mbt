@@ -158,3 +158,22 @@ test "config_candidates puts project files before user files" {
   assert_eq(candidates[0].path, "./mcpbox.json")
   assert_eq(candidates[0].key, "mcpServers")
 }
+
+///|
+test "config_candidates reads ~/.mcpbox.json before the XDG file" {
+  let candidates = config_candidates()
+  let mut home_index = -1
+  let mut xdg_index = -1
+  for i, candidate in candidates {
+    if candidate.path.has_suffix("/.mcpbox.json") {
+      home_index = i
+    }
+    if candidate.path.has_suffix("/mcpbox/config.json") {
+      xdg_index = i
+    }
+  }
+  assert_true(home_index >= 0)
+  assert_true(xdg_index >= 0)
+  assert_true(home_index < xdg_index)
+  assert_eq(candidates[home_index].key, "mcpServers")
+}

@@ -105,8 +105,9 @@ Files are read in precedence order, with the first definition of a name winning:
 1. `$MCPBOX_CONFIG`
 2. `./mcpbox.json`, `./.mcpbox.json`, `./config/mcpbox.json`, `./.mcpbox/config.json`
 3. `./.cursor/mcp.json`, `./.vscode/mcp.json`
-4. `~/.config/mcpbox/config.json`
-5. `~/.cursor/mcp.json`, `~/.claude.json`,
+4. `~/.mcpbox.json`
+5. `~/.config/mcpbox/config.json`
+6. `~/.cursor/mcp.json`, `~/.claude.json`,
    `~/.codeium/windsurf/mcp_config.json`,
    `~/.config/Claude/claude_desktop_config.json`,
    `~/Library/Application Support/Claude/claude_desktop_config.json`
