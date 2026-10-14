@@ -1,0 +1,45 @@
+{
+  "name": "@tomasko/mcpbox",
+  "version": "0.1.1",
+  "description": "Carry Model Context Protocol tools into scripts, CLIs and agents — a self-contained MCP client in the spirit of mcporter.",
+  "license": "Apache-2.0",
+  "bin": {
+    "mcpbox": "bin/mcpbox.js"
+  },
+  "files": [
+    "bin/mcpbox.js",
+    "lib.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tomasky/mcpbox.git"
+  },
+  "homepage": "https://github.com/tomasky/mcpbox",
+  "bugs": "https://github.com/tomasky/mcpbox/issues",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-client",
+    "cli",
+    "agent",
+    "tools",
+    "mcporter",
+    "moonbit"
+  ],
+  "preferGlobal": true
+}

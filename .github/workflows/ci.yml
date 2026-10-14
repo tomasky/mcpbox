@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: check, format and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Show toolchain
+        run: moon version --all
+
+      - name: Update dependencies
+        run: moon update
+
+      - name: Check (warnings are errors)
+        run: moon check --target native --deny-warn
+
+      # `moon fmt` chooses its canonical backend itself and formats for
+      # wasm-gc regardless of `preferred_target`, which the module sets to
+      # native. The formatter therefore rewrites `Int` to `Int32` — including
+      # in packages marked `supported_targets = "+native"` — and a hard gate
+      # would fail on a difference that is not this project's to fix. Nor can
+      # the toolchain be pinned around it: the installer serves only `latest`
+      # and older versions are dropped from the CDN. So report, do not block;
+      # `--deny-warn` and the tests below are the gates that do block.
+      - name: Format check (advisory)
+        run: |
+          if moon fmt --check; then
+            echo "::notice title=moon fmt::no formatting differences"
+          else
+            echo "::warning title=moon fmt::differences reported above; not failing the build"
+          fi
+
+      - name: Test
+        run: moon test --target native
+
+      # The unit tests cover the parsers and framing helpers, but not the
+      # process/socket plumbing around them. The fixtures are real servers, so
+      # this catches transport regressions the unit tests cannot see.
+      - name: Integration (stdio and HTTP transports)
+        run: |
+          moon build --target native
+          tests/integration.sh
+
+  shellcheck:
+    name: lint shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck install.sh tests/integration.sh scripts/*.sh
+
+  npm:
+    name: lint the npm wrapper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Check every script the package ships, so adding one cannot silently
+      # leave the check pointing at a file that no longer exists.
+      - name: Syntax check
+        run: |
+          set -eu
+          find npmjs -name '*.js' -not -path '*/node_modules/*' -print0 |
+            while IFS= read -r -d '' script; do
+              echo "node --check $script"
+              node --check "$script"
+            done
+      - name: Unit tests
+        working-directory: npmjs
+        run: node --test
