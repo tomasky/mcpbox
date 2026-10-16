@@ -11,7 +11,7 @@
 # depend on any particular MCP implementation being installed.
 set -euo pipefail
 
-BIN="${MCPBOX_BIN:-_build/native/debug/build/cmd/main/main.exe}"
+BIN="${MCPBOX_BIN:-_build/native/debug/build/cmd/mcpbox/mcpbox.exe}"
 PORT="${MCPBOX_TEST_PORT:-8765}"
 
 if [ ! -x "$BIN" ]; then

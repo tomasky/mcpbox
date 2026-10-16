@@ -27,6 +27,8 @@ Install it for repeated use:
 npm install -g @tomasko/mcpbox
 # or
 curl -LsSf https://raw.githubusercontent.com/tomasky/mcpbox/master/install.sh | bash
+# or, with the MoonBit toolchain: builds from source into ~/.moon/bin
+moon install kupas/mcpbox/cmd/mcpbox
 ```
 
 ## Quick start
@@ -119,7 +121,7 @@ no fallback expands to the empty string.
 
 ```sh
 moon build --target native --release
-_build/native/release/build/cmd/main/main.exe --help
+_build/native/release/build/cmd/mcpbox/mcpbox.exe --help
 ```
 
 The release binaries are linked statically against musl on Linux, so they run
@@ -138,7 +140,7 @@ server in `tests/fixtures/echo_server.py`:
 
 ```sh
 moon build --target native
-_build/native/debug/build/cmd/main/main.exe list \
+_build/native/debug/build/cmd/mcpbox/mcpbox.exe list \
   --stdio "python3 tests/fixtures/echo_server.py"
 ```
 

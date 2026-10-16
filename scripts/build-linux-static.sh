@@ -96,7 +96,7 @@ cd "$root"
 MOON_CC="$work/mcpbox-musl-gcc" MOON_AR=ar \
   moon build --target native --release
 
-bin="$root/_build/native/release/build/cmd/main/main.exe"
+bin="$root/_build/native/release/build/cmd/mcpbox/mcpbox.exe"
 [ -f "$bin" ] || die "build did not produce $bin"
 
 mkdir -p "$(dirname "$out")"
