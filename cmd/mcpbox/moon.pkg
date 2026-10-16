@@ -1,5 +1,5 @@
 import {
-  "kupas/mcpbox",
+  "kupas/mcpbox" @lib,
   "moonbitlang/async",
 }
 
