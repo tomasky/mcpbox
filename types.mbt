@@ -1,7 +1,7 @@
 ///|
 /// The mcpbox version, kept in sync with `moon.mod` and `npmjs/package.json`.
 /// It is also what the client reports to servers during `initialize`.
-pub let version : String = "0.1.4"
+pub let version : String = "0.1.5"
 
 ///|
 /// The MCP revision mcpbox advertises first. Servers that predate it answer

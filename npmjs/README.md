@@ -191,7 +191,7 @@ dependency declares one:
 $ pnpm add @tomasko/mcpbox
 Error: ERR_PNPM_IGNORED_BUILDS
   × adding a new package
-  ╰─▶ Ignored build scripts: @tomasko/mcpbox@0.1.4
+  ╰─▶ Ignored build scripts: @tomasko/mcpbox@0.1.5
 ```
 
 Downloading lazily from `bin/mcpbox.js` sidesteps all of it: it works under
