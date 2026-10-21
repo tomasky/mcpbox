@@ -41,6 +41,97 @@ fn expand_home(path : String) -> String {
 }
 
 ///|
+/// Resolve an explicitly configured path the way the config layers are
+/// resolved: surrounding whitespace is ignorable and a quoted `~/...` expands
+/// to the home directory.
+fn resolve_config_path(path : String) -> String {
+  expand_home(path.trim().to_owned())
+}
+
+///|
+/// The directory holding a config file. Used to anchor relative `cwd` values
+/// so a stdio server behaves the same no matter where mcpbox was launched.
+fn config_directory(source : String) -> String {
+  @path.Path(source).dirname().to_string()
+}
+
+///|
+/// Resolve a stdio `cwd` against the config file that declared it. A leading
+/// `~` expands to the home directory; relative paths are anchored at the
+/// config file, not at the caller's working directory.
+fn resolve_cwd(cwd : String, source : String) -> String {
+  let trimmed = cwd.trim().to_owned()
+  if trimmed.length() == 0 {
+    return ""
+  }
+  let expanded = expand_home(trimmed)
+  if @path.Path(expanded).is_absolute() {
+    expanded
+  } else {
+    @path.Path(config_directory(source))
+    .join(@path.Path(expanded))
+    .normalize()
+    .to_string()
+  }
+}
+
+///|
+/// Match one server name against a `config` filter. A filter without wildcards
+/// is a substring match; `*` matches any sequence and `?` one character. The
+/// wildcard form matches any substring too, using bounded dynamic programming
+/// so a pathological pattern cannot backtrack exponentially.
+fn server_matches_filter(name : String, filter : String) -> Bool {
+  if !filter.contains("*") && !filter.contains("?") {
+    return name.contains(filter)
+  }
+  let text = name.to_array()
+  let pattern = filter.to_array()
+  let m = pattern.length()
+  if m == 0 {
+    return true
+  }
+  let mut previous : Array[Bool] = Array::make(m + 1, false)
+  previous[0] = true
+  for i in 1..<(m + 1) {
+    previous[i] = pattern[i - 1] == '*' && previous[i - 1]
+  }
+  if previous[m] {
+    return true
+  }
+  for c in text {
+    let current : Array[Bool] = Array::make(m + 1, false)
+    current[0] = true
+    for i in 1..<(m + 1) {
+      let token = pattern[i - 1]
+      current[i] = if token == '*' {
+        current[i - 1] || previous[i]
+      } else {
+        previous[i - 1] && (token == '?' || token == c)
+      }
+    }
+    if current[m] {
+      return true
+    }
+    previous = current
+  }
+  false
+}
+
+///|
+/// True when a server matches any of the filters (an empty list matches all).
+fn server_matches_filters(name : String, filters : Array[String]) -> Bool {
+  if filters.length() == 0 {
+    return true
+  }
+  for filter in filters {
+    if server_matches_filter(name, filter) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 /// The XDG config directory, falling back to `~/.config`.
 fn config_home() -> String {
   match @env.get_env_var("XDG_CONFIG_HOME") {
@@ -57,10 +148,11 @@ fn config_candidates() -> Array[Candidate] {
   let home = home_dir()
   let xdg = config_home()
   let candidates : Array[Candidate] = []
-  // An explicit path overrides everything else.
+  // An explicit path overrides everything else. Trim it and expand a leading
+  // `~` so a quoted `--config`-style value works the same as the layers below.
   match @env.get_env_var("MCPBOX_CONFIG") {
-    Some(path) if path.length() > 0 =>
-      candidates.push({ path: expand_home(path), key: "mcpServers", })
+    Some(path) if path.trim().length() > 0 =>
+      candidates.push({ path: resolve_config_path(path), key: "mcpServers", })
     _ => ()
   }
   for
@@ -351,7 +443,10 @@ fn parse_server(
           command,
           args: json_string_array(obj, "args"),
           env: json_string_map(obj, "env"),
-          cwd: json_string(obj, "cwd").unwrap_or(""),
+          cwd: match json_string(obj, "cwd") {
+            Some(cwd) => resolve_cwd(cwd, source)
+            None => ""
+          },
         }),
         note: json_string(obj, "description").unwrap_or(source),
       }
@@ -395,7 +490,7 @@ pub async fn load_servers() -> Array[Server] raise McpError {
   let servers : Array[Server] = []
   let seen : Map[String, Unit] = Map([])
   for candidate in config_candidates() {
-    let path = expand_home(candidate.path)
+    let path = resolve_config_path(candidate.path)
     let exists = @fs.exists(path) catch { _ => false }
     if !exists {
       continue
@@ -418,10 +513,10 @@ pub async fn load_servers() -> Array[Server] raise McpError {
 ///|
 /// The config files that exist on this machine, in precedence order, with the
 /// number of servers each contributes. Used by `mcpbox config`.
-pub async fn config_files() -> Array[(String, Int)] raise McpError {
-  let out : Array[(String, Int)] = []
+pub async fn config_files() -> Array[(String, Int32)] raise McpError {
+  let out : Array[(String, Int32)] = []
   for candidate in config_candidates() {
-    let path = expand_home(candidate.path)
+    let path = resolve_config_path(candidate.path)
     let exists = @fs.exists(path) catch { _ => false }
     if !exists {
       continue

@@ -64,7 +64,8 @@ mcpbox call adhoc.echo --stdio "python3 echo_server.py" name=hi count=5
 - **Real exit codes.** A failed call exits non-zero, so a script or an agent can
   tell the difference.
 - **Two transports.** stdio child processes and Streamable HTTP, including
-  `text/event-stream` responses and session ids.
+  `text/event-stream` responses, session ids, gzip decoding, and same-origin
+  redirects that keep POST and DELETE semantics.
 
 ## Commands
 
@@ -72,12 +73,15 @@ mcpbox call adhoc.echo --stdio "python3 echo_server.py" name=hi count=5
 | --- | --- |
 | `mcpbox list [server ...]` | Discover servers and list their tools |
 | `mcpbox call <server>.<tool> [key=value ...]` | Call a tool |
-| `mcpbox config` | Show config files and the resolved server set |
+| `mcpbox config [filter ...]` | Show config files and the resolved server set |
 | `mcpbox version` | Print the version |
 | `mcpbox help` | Show help |
 
 Useful flags: `--json`, `--brief`, `--raw`, `--timeout <seconds>`,
-`--http-url <url>`, `--stdio "<command>"`.
+`--http-url <url>`, `--stdio "<command>"`. A `--` stops option parsing so
+option-like words after it remain tool arguments. `config` filters match name
+substrings, with `*` matching any sequence and `?` one character; repeat the
+filter to match any of several names.
 
 ## Configuration
 
@@ -102,7 +106,9 @@ A minimal `mcpbox.json`:
 }
 ```
 
-Files are read in precedence order, with the first definition of a name winning:
+Files are read in precedence order, with the first definition of a name winning.
+`MCPBOX_CONFIG` is trimmed and a leading `~` is expanded, so a quoted
+`"~/mcp.json"` behaves like the layers below.
 
 1. `$MCPBOX_CONFIG`
 2. `./mcpbox.json`, `./.mcpbox.json`, `./config/mcpbox.json`, `./.mcpbox/config.json`
@@ -114,8 +120,11 @@ Files are read in precedence order, with the first definition of a name winning:
    `~/.config/Claude/claude_desktop_config.json`,
    `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-String values support `${VAR}` and `${VAR:-fallback}`. An unset variable with
-no fallback expands to the empty string.
+String values support `${VAR}` and `${VAR:-fallback}`, including placeholders
+embedded inside a longer value. An unset variable with no fallback expands to
+the empty string. An explicit stdio `cwd` is resolved against the config file
+that declares it, so relative paths do not depend on where `mcpbox` was
+launched.
 
 ## Build from source
 

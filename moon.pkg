@@ -8,6 +8,7 @@ import {
   "moonbitlang/async/http",
   "moonbitlang/async/process",
   "moonbitlang/async/stdio",
+  "moonbitlang/x/path",
 }
 
 supported_targets = "+native"

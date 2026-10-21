@@ -15,7 +15,7 @@
 /// A live, initialized MCP session.
 pub struct Session {
   priv name : String
-  priv mut next_id : Int
+  priv mut next_id : Int32
   priv link : Link
   priv mut info : ServerInfo
 }
@@ -73,7 +73,7 @@ fn Session::connect(name : String, link : Link) -> Session {
 /// by the enclosing task group, so an error anywhere still reaps it.
 pub async fn with_server(
   server : Server,
-  timeout_ms : Int,
+  timeout_ms : Int32,
   f : async (Session) -> Unit raise Error,
 ) -> Unit raise Error {
   match server.kind {
@@ -88,7 +88,7 @@ pub async fn with_server(
 async fn with_stdio_session(
   name : String,
   spec : StdioSpec,
-  timeout_ms : Int,
+  timeout_ms : Int32,
   f : async (Session) -> Unit raise Error,
 ) -> Unit raise Error {
   @async.with_task_group(group => {
@@ -151,7 +151,7 @@ async fn with_stdio_session(
 async fn with_http_session(
   name : String,
   spec : HttpSpec,
-  timeout_ms : Int,
+  timeout_ms : Int32,
   f : async (Session) -> Unit raise Error,
 ) -> Unit raise Error {
   let link = { url: spec.url, headers: spec.headers, session_id: None, }
@@ -165,7 +165,7 @@ async fn with_http_session(
 /// Run the MCP `initialize` handshake and the `initialized` notification.
 async fn Session::initialize(
   self : Session,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Unit raise Error {
   let params = Json::object({
     "protocolVersion": Json::string(protocol_version),
@@ -225,7 +225,7 @@ async fn Session::request(
   self : Session,
   rpc_method : String,
   params : Json?,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Json raise Error {
   let id = self.next_id
   self.next_id = self.next_id + 1
@@ -270,12 +270,22 @@ async fn Session::notify(
   self : Session,
   rpc_method : String,
   params : Json?,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Unit raise Error {
   let message = rpc_notification(rpc_method, params)
   match self.link {
     Stdio(link) => write_line(link, message, self.name, timeout_ms)
-    Http(link) => ignore(http_post(link, message, self.name, timeout_ms))
+    Http(link) =>
+      ignore(
+        http_exchange(
+          link,
+          @http.Post,
+          link.url,
+          message.stringify(),
+          self.name,
+          timeout_ms,
+        ),
+      )
   }
 }
 
@@ -283,7 +293,7 @@ async fn Session::notify(
 /// List the server's tools.
 pub async fn Session::list_tools(
   self : Session,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Array[Tool] raise Error {
   let result = self.request(
     "tools/list",
@@ -299,7 +309,7 @@ pub async fn Session::call_tool(
   self : Session,
   name : String,
   arguments : Json,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> CallResult raise Error {
   let params = Json::object({
     "name": Json::string(name),
@@ -320,17 +330,14 @@ async fn Session::close(self : Session) -> Unit {
     Http(link) =>
       match link.session_id {
         None => ()
-        Some(session_id) => {
-          let headers : Map[@http.CaseInsensitiveString, String] = Map([])
-          headers[@http.CaseInsensitiveString("mcp-session-id")] = session_id
+        Some(_) =>
           ignore(
             @async.with_timeout_opt(5000, () => {
-              @http.request(link.url, @http.Delete, headers, "")
+              http_exchange(link, @http.Delete, link.url, "", self.name, 5000)
             }),
           ) catch {
             _ => ()
           }
-        }
       }
   }
 }
@@ -435,7 +442,7 @@ async fn write_line(
   link : StdioLink,
   message : Json,
   name : String,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Unit raise Error {
   let line = message.stringify() + "\n"
   @async.with_timeout(
@@ -452,7 +459,7 @@ async fn write_line(
 async fn read_message(
   link : StdioLink,
   name : String,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> RpcMessage raise Error {
   let mut outcome : RpcMessage? = None
   while outcome is None {
@@ -506,45 +513,162 @@ fn stderr_hint(link : StdioLink) -> String {
 ///|
 /// POST one message and return the decoded JSON-RPC result. Handles both
 /// `application/json` and the `text/event-stream` framing servers may choose
-/// for a Streamable HTTP response.
+/// for a Streamable HTTP response. Several SSE events can precede the response
+/// (notifications, keep-alives), so each event is decoded on its own instead of
+/// being concatenated into one invalid JSON document.
 async fn http_request(
   link : HttpLink,
   message : Json,
-  id : Int,
+  id : Int32,
   name : String,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Json raise Error {
-  let (code, body) = http_post(link, message, name, timeout_ms)
+  let (code, body) = http_exchange(
+    link,
+    @http.Post,
+    link.url,
+    message.stringify(),
+    name,
+    timeout_ms,
+  )
   if code >= 400 {
     raise fail("'\{name}' returned HTTP \{code}: \{body}")
   }
-  let payload = extract_sse(body)
-  if payload.length() == 0 {
+  let payloads = sse_events(body)
+  let mut parsed_any = false
+  for payload in payloads {
+    if payload.length() == 0 {
+      continue
+    }
+    let json = @json.parse(payload) catch {
+      e => raise fail("'\{name}' returned invalid JSON: \{e.to_string()}")
+    }
+    parsed_any = true
+    match find_response(json, id) {
+      Some(Ok(result)) => return result
+      Some(Err(error)) => raise fail("\{name}: \{error.message}")
+      None => ()
+    }
+  }
+  if !parsed_any {
     raise fail("'\{name}' returned an empty response")
   }
-  let json = @json.parse(payload) catch {
-    e => raise fail("'\{name}' returned invalid JSON: \{e.to_string()}")
+  raise fail("'\{name}' did not return a response to request \{id}")
+}
+
+///|
+/// One HTTP exchange, following same-origin redirects with the method rules
+/// used by MCP clients: 301/302 preserve non-POST methods and turn POST into
+/// GET, 303 turns everything except HEAD into GET, and 307/308 preserve both
+/// method and body. Session-termination DELETEs therefore survive 301/302.
+async fn http_exchange(
+  link : HttpLink,
+  request_method : @http.RequestMethod,
+  url : String,
+  body : String,
+  name : String,
+  timeout_ms : Int32,
+) -> (Int32, String) raise Error {
+  let mut current_method = request_method
+  let mut current_url = url
+  let mut current_body = body
+  let mut redirects = 0
+  while true {
+    let (response, text) = http_send_once(
+      link, current_method, current_url, current_body, name, timeout_ms,
+    )
+    if !is_redirect(response.code) {
+      return (response.code, text)
+    }
+    let location = match
+      response.headers.get(@http.CaseInsensitiveString("location")) {
+      Some(location) if location.trim().length() > 0 =>
+        location.trim().to_owned()
+      _ => return (response.code, text)
+    }
+    if redirects >= 10 {
+      raise fail("'\{name}' exceeded 10 HTTP redirects")
+    }
+    let next_url = resolve_redirect_url(current_url, location)
+    if url_origin(current_url) != url_origin(next_url) {
+      raise fail(
+        "'\{name}' redirected to another origin (\{next_url}); mcpbox only follows same-origin redirects",
+      )
+    }
+    let next_method = redirect_method(current_method, response.code)
+    if next_method != current_method {
+      current_body = ""
+    }
+    current_method = next_method
+    current_url = next_url
+    redirects += 1
   }
-  match find_response(json, id) {
-    Some(Ok(result)) => result
-    Some(Err(error)) => raise fail("\{name}: \{error.message}")
-    None => raise fail("'\{name}' did not return a response to request \{id}")
+  (0, "")
+}
+
+///|
+fn is_redirect(code : Int32) -> Bool {
+  code == 301 || code == 302 || code == 303 || code == 307 || code == 308
+}
+
+///|
+/// The method used for the next hop. A changed method drops the body, as
+/// required for a redirected POST that becomes a GET.
+fn redirect_method(
+  request_method : @http.RequestMethod,
+  code : Int32,
+) -> @http.RequestMethod {
+  match code {
+    301 | 302 =>
+      match request_method {
+        @http.Post => @http.Get
+        _ => request_method
+      }
+    303 =>
+      match request_method {
+        @http.Head => @http.Head
+        _ => @http.Get
+      }
+    _ => request_method
   }
 }
 
 ///|
-/// POST one message, returning the HTTP status and the response text.
-async fn http_post(
+/// Send one HTTP request and return the response and body text. Redirect
+/// responses are returned to the caller so it can decide whether to follow
+/// them.
+async fn http_send_once(
   link : HttpLink,
-  message : Json,
+  request_method : @http.RequestMethod,
+  url : String,
+  body : String,
   name : String,
-  timeout_ms : Int,
-) -> (Int, String) raise Error {
+  timeout_ms : Int32,
+) -> (@http.Response, String) raise Error {
   let headers : Map[@http.CaseInsensitiveString, String] = Map([])
-  headers[@http.CaseInsensitiveString("content-type")] = "application/json"
   headers[@http.CaseInsensitiveString("accept")] = "application/json, text/event-stream"
+  // The MoonBit HTTP client only decompresses `gzip`, which it advertises
+  // itself. Ignore a caller-supplied Accept-Encoding so a server cannot pick a
+  // coding the client would hand back as opaque bytes.
+  let is_body_request = match request_method {
+    @http.Get | @http.Head => false
+    _ => true
+  }
+  if is_body_request && body.length() > 0 {
+    headers[@http.CaseInsensitiveString("content-type")] = "application/json"
+    headers[@http.CaseInsensitiveString("content-length")] = body
+      .length()
+      .to_string()
+  }
   for entry in link.headers {
-    headers[@http.CaseInsensitiveString(entry.0)] = entry.1
+    let key = entry.0
+    let lower = key.to_lower()
+    if lower == "accept-encoding" ||
+      lower == "content-length" ||
+      lower == "content-type" {
+      continue
+    }
+    headers[@http.CaseInsensitiveString(key)] = entry.1
   }
   match link.session_id {
     Some(session_id) =>
@@ -557,20 +681,22 @@ async fn http_post(
   // refuse. Driving the client directly puts `Content-Length` in the
   // per-request headers, where the library honours it and sends a fixed-length
   // body every server understands.
-  let body = message.stringify()
-  headers[@http.CaseInsensitiveString("content-length")] = body
-    .length()
-    .to_string()
-  let (origin, path) = split_url(link.url)
+  let (origin, path) = split_url(url)
   let (response, data) = @async.with_timeout(
     timeout_ms,
     () => {
       let client = @http.Client::Client(origin)
       defer client.close()
-      let response = client
-        ..request(@http.Post, path, extra_headers=headers)
+      let response = if is_body_request && body.length() > 0 {
+        client
+        ..request(request_method, path, extra_headers=headers)
         ..write(body)
         .end_request()
+      } else {
+        client
+        ..request(request_method, path, extra_headers=headers)
+        .end_request()
+      }
       (response, client.read_all())
     },
     error=fail("timed out after \{timeout_ms}ms calling '\{name}'"),
@@ -584,7 +710,7 @@ async fn http_post(
   let text = data.text() catch {
     e => raise fail("cannot read the response from '\{name}': \{e.to_string()}")
   }
-  (response.code, text)
+  (response, text)
 }
 
 ///|
@@ -596,42 +722,189 @@ fn split_url(url : String) -> (String, String) {
     Some(index) => index + 3
     None => 0
   }
-  let rest = url[scheme_end:]
-  match rest.find("/") {
-    Some(index) =>
-      (
-        url.exact_view(end=scheme_end + index).to_owned() + "/",
-        rest[index:].to_owned(),
-      )
-    None => (url + "/", "/")
+  let chars = url.to_array()
+  let mut split = -1
+  let mut i = scheme_end
+  while i < chars.length() {
+    if chars[i] == '/' || chars[i] == '?' || chars[i] == '#' {
+      split = i
+      break
+    }
+    i += 1
   }
+  if split < 0 {
+    return (url + "/", "/")
+  }
+  let mut end = chars.length()
+  i = split
+  while i < chars.length() {
+    if chars[i] == '#' {
+      end = i
+      break
+    }
+    i += 1
+  }
+  let origin = url.exact_view(end=split).to_owned() + "/"
+  let path = if chars[split] == '/' {
+    url.exact_view(start=split, end~).to_owned()
+  } else {
+    "/" + url.exact_view(start=split, end~).to_owned()
+  }
+  (origin, path)
 }
 
 ///|
-/// Collapse a `text/event-stream` body into the JSON payload it carries. A
-/// plain JSON body is returned unchanged.
-fn extract_sse(body : String) -> String {
-  if !body.contains("data:") {
-    return body.trim().to_owned()
+/// The scheme and authority of a URL (`https://host:port`), used to keep
+/// redirects on the same origin so session ids and configured headers never
+/// leak to a different host.
+fn url_origin(url : String) -> String {
+  let scheme_end = match url.find("://") {
+    Some(index) => index + 3
+    None => 0
   }
-  let out = StringBuilder()
-  for line in body.split("\n") {
-    let trimmed = line.trim()
-    if trimmed.has_prefix("data:") {
-      match trimmed.strip_prefix("data:") {
-        Some(rest) => out.write_string(rest.trim().to_owned())
-        None => ()
+  let chars = url.to_array()
+  let mut end = chars.length()
+  let mut i = scheme_end
+  while i < chars.length() {
+    if chars[i] == '/' || chars[i] == '?' || chars[i] == '#' {
+      end = i
+      break
+    }
+    i += 1
+  }
+  let scheme = url.exact_view(end=scheme_end).to_owned()
+  let authority = url.exact_view(start=scheme_end, end~).to_owned()
+  scheme.to_lower() + authority.to_lower()
+}
+
+///|
+/// The path part of a URL, without query or fragment.
+fn url_path(url : String) -> String {
+  let scheme_end = match url.find("://") {
+    Some(index) => index + 3
+    None => 0
+  }
+  let chars = url.to_array()
+  let mut start = -1
+  let mut i = scheme_end
+  while i < chars.length() {
+    if chars[i] == '/' || chars[i] == '?' || chars[i] == '#' {
+      start = i
+      break
+    }
+    i += 1
+  }
+  if start < 0 {
+    return "/"
+  }
+  if chars[start] != '/' {
+    return "/"
+  }
+  let mut end = chars.length()
+  i = start
+  while i < chars.length() {
+    if chars[i] == '?' || chars[i] == '#' {
+      end = i
+      break
+    }
+    i += 1
+  }
+  url.exact_view(start~, end~).to_owned()
+}
+
+///|
+/// Drop a query string and fragment from a URL.
+fn url_without_query(url : String) -> String {
+  let chars = url.to_array()
+  let mut end = chars.length()
+  let mut i = 0
+  while i < chars.length() {
+    if chars[i] == '?' || chars[i] == '#' {
+      end = i
+      break
+    }
+    i += 1
+  }
+  url.exact_view(end~).to_owned()
+}
+
+///|
+/// Resolve a `Location` header against the URL that produced it. Handles
+/// absolute URLs, scheme-relative URLs, root-relative paths, query-only
+/// references and relative paths.
+fn resolve_redirect_url(base : String, location : String) -> String {
+  let loc = location.trim().to_owned()
+  if loc.has_prefix("http://") || loc.has_prefix("https://") {
+    return loc
+  }
+  let origin = url_origin(base)
+  if loc.has_prefix("//") {
+    let scheme_end = match base.find("://") {
+      Some(index) => index
+      None => 0
+    }
+    return base.exact_view(end=scheme_end).to_owned() + ":" + loc
+  }
+  if loc.has_prefix("/") {
+    return origin + loc
+  }
+  if loc.has_prefix("?") {
+    return url_without_query(base) + loc
+  }
+  if loc.has_prefix("#") {
+    return url_without_query(base) + loc
+  }
+  let path = url_path(base)
+  let dir = match path.rev_find("/") {
+    Some(index) => path.exact_view(end=index + 1).to_owned()
+    None => "/"
+  }
+  origin + dir + loc
+}
+
+///|
+/// Split an HTTP body into the JSON payloads carried by its SSE events. A
+/// plain JSON body is returned as a single payload. Data lines belonging to
+/// one event are joined with a newline, and a blank line closes the event.
+fn sse_events(body : String) -> Array[String] {
+  let trimmed_body = body.trim().to_owned()
+  if trimmed_body.has_prefix("{") ||
+    trimmed_body.has_prefix("[") ||
+    !trimmed_body.contains("data:") {
+    return [trimmed_body]
+  }
+  let events : Array[String] = []
+  let current = StringBuilder()
+  let mut has_data = false
+  for raw in body.split("\n") {
+    let line = raw.trim()
+    if line.length() == 0 {
+      if has_data {
+        events.push(current.to_string())
+        current.reset()
+        has_data = false
       }
+      continue
+    }
+    if line.has_prefix("data:") {
+      if has_data {
+        current.write_string("\n")
+      }
+      current.write_string(line[5:].trim().to_owned())
+      has_data = true
     }
   }
-  out.to_string()
+  if has_data {
+    events.push(current.to_string())
+  }
+  events
 }
 
 ///|
 /// Find the response with a matching id inside a single object or a batch.
 fn find_response(
   json : Json,
-  id : Int,
+  id : Int32,
 ) -> Result[Json, RpcError]? raise McpError {
   match json {
     Array(items) => {

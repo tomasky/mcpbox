@@ -12,7 +12,7 @@ pub fn call_result_to_json(CallResult) -> Json
 
 pub fn coerce_value(String, Json?) -> Json
 
-pub async fn config_files() -> Array[(String, Int)] raise McpError
+pub async fn config_files() -> Array[(String, Int32)] raise McpError
 
 pub fn content_to_json(Content) -> Json
 
@@ -30,7 +30,7 @@ pub async fn load_servers() -> Array[Server] raise McpError
 
 pub async fn main_cli() -> Unit
 
-pub fn mcpbox_exit(Int) -> Unit
+pub fn mcpbox_exit(Int32) -> Unit
 
 pub fn parse_call_result(Json) -> CallResult raise McpError
 
@@ -50,11 +50,11 @@ pub fn render_params(Json) -> String
 
 pub fn render_tool_signature(Tool) -> String
 
-pub fn rpc_error_response(Json, Int, String) -> Json
+pub fn rpc_error_response(Json, Int32, String) -> Json
 
 pub fn rpc_notification(String, Json?) -> Json
 
-pub fn rpc_request(Int, String, Json?) -> Json
+pub fn rpc_request(Int32, String, Json?) -> Json
 
 pub fn rpc_result_response(Json, Json) -> Json
 
@@ -78,7 +78,7 @@ pub fn transport_target(Server) -> String
 
 pub let version : String
 
-pub async fn with_server(Server, Int, async (Session) -> Unit) -> Unit
+pub async fn with_server(Server, Int32, async (Session) -> Unit) -> Unit
 
 // Errors
 pub(all) suberror McpError {
@@ -109,14 +109,14 @@ pub(all) struct HttpSpec {
 pub fn HttpSpec::to_repr(Self) -> @debug.Repr
 
 pub(all) struct RpcError {
-  code : Int
+  code : Int32
   message : String
   data : Json?
 } derive(@debug.Debug)
 pub fn RpcError::to_repr(Self) -> @debug.Repr
 
 pub(all) enum RpcMessage {
-  Response(Int, Json?, RpcError?)
+  Response(Int32, Json?, RpcError?)
   ServerRequest(Json, String, Json?)
   Notification(String, Json?)
 } derive(@debug.Debug)
@@ -146,8 +146,8 @@ pub fn ServerKind::to_repr(Self) -> @debug.Repr
 pub struct Session {
   // private fields
 }
-pub async fn Session::call_tool(Self, String, Json, Int) -> CallResult
-pub async fn Session::list_tools(Self, Int) -> Array[Tool]
+pub async fn Session::call_tool(Self, String, Json, Int32) -> CallResult
+pub async fn Session::list_tools(Self, Int32) -> Array[Tool]
 pub fn Session::name(Self) -> String
 pub fn Session::server_info(Self) -> ServerInfo
 

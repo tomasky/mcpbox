@@ -4,20 +4,79 @@
 /// server in `tests/fixtures`.
 
 ///|
-test "extract_sse pulls the data lines out of an event stream" {
+test "sse_events pulls the data lines out of an event stream" {
   let body = "event: message\ndata: {\"a\":1}\n\n"
-  assert_eq(extract_sse(body), "{\"a\":1}")
+  assert_eq(sse_events(body).join("|"), "{\"a\":1}")
 }
 
 ///|
-test "extract_sse joins multiple data lines" {
+test "sse_events joins multiple data lines inside one event" {
   let body = "data: {\"a\":\ndata: 1}\n\n"
-  assert_eq(extract_sse(body), "{\"a\":1}")
+  assert_eq(sse_events(body).join("|"), "{\"a\":\n1}")
 }
 
 ///|
-test "extract_sse returns a plain JSON body unchanged" {
-  assert_eq(extract_sse(" {\"a\":1} "), "{\"a\":1}")
+test "sse_events keeps separate events apart" {
+  let body = "data: {\"method\":\"note\"}\n\ndata: {\"id\":1,\"result\":{}}\n\n"
+  assert_eq(
+    sse_events(body).join("|"),
+    "{\"method\":\"note\"}|{\"id\":1,\"result\":{}}",
+  )
+}
+
+///|
+test "sse_events returns a plain JSON body unchanged" {
+  assert_eq(sse_events(" {\"a\":1} ").join("|"), "{\"a\":1}")
+}
+
+///|
+test "redirect_method preserves DELETE across 301 and 302" {
+  assert_eq(redirect_method(@http.Delete, 301), @http.Delete)
+  assert_eq(redirect_method(@http.Delete, 302), @http.Delete)
+  assert_eq(redirect_method(@http.Post, 301), @http.Get)
+  assert_eq(redirect_method(@http.Post, 302), @http.Get)
+}
+
+///|
+test "redirect_method rewrites 303 but preserves 307 and 308" {
+  assert_eq(redirect_method(@http.Delete, 303), @http.Get)
+  assert_eq(redirect_method(@http.Head, 303), @http.Head)
+  assert_eq(redirect_method(@http.Post, 307), @http.Post)
+  assert_eq(redirect_method(@http.Delete, 308), @http.Delete)
+}
+
+///|
+test "url_origin ignores path, query and fragment" {
+  assert_eq(
+    url_origin("https://Example.COM:8443/a/b?x=1#f"),
+    "https://example.com:8443",
+  )
+  assert_eq(url_origin("http://127.0.0.1:8765"), "http://127.0.0.1:8765")
+}
+
+///|
+test "resolve_redirect_url handles absolute, root and relative locations" {
+  let base = "http://127.0.0.1:8765/old/mcp?token=1"
+  assert_eq(
+    resolve_redirect_url(base, "https://example.com/new"),
+    "https://example.com/new",
+  )
+  assert_eq(
+    resolve_redirect_url(base, "/current"),
+    "http://127.0.0.1:8765/current",
+  )
+  assert_eq(
+    resolve_redirect_url(base, "next"),
+    "http://127.0.0.1:8765/old/next",
+  )
+  assert_eq(
+    resolve_redirect_url(base, "//example.com/mcp"),
+    "http://example.com/mcp",
+  )
+  assert_eq(
+    resolve_redirect_url(base, "?next=1"),
+    "http://127.0.0.1:8765/old/mcp?next=1",
+  )
 }
 
 ///|
@@ -110,6 +169,27 @@ test "find_response locates a response inside a batch" {
 }
 
 ///|
+test "find_response preserves an explicit JSON null result" {
+  let json = parse_jsonc("{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":null}")
+  match find_response(json, 5) {
+    Some(Ok(result)) => assert_eq(result.stringify(), "null")
+    _ => abort("expected a null result")
+  }
+}
+
+///|
+test "parse_call_result preserves an explicit structured null" {
+  let result = parse_call_result(
+    parse_jsonc("{\"content\":[],\"structuredContent\":null}"),
+  )
+  match result.structured {
+    Some(json) => assert_eq(json.stringify(), "null")
+    None => abort("expected null structured content")
+  }
+  assert_eq(render_call_result(result), "null")
+}
+
+///|
 test "find_response surfaces a batched error" {
   let json = parse_jsonc(
     "[{\"jsonrpc\":\"2.0\",\"id\":5,\"error\":{\"code\":1,\"message\":\"bad\"}}]",
@@ -145,4 +225,11 @@ test "split_url gives a bare host the root path" {
     split_url("https://mcp.example.com"),
     ("https://mcp.example.com/", "/"),
   )
+}
+
+///|
+test "split_url keeps query strings and drops fragments" {
+  assert_eq(split_url("http://h:1/mcp"), ("http://h:1/", "/mcp"))
+  assert_eq(split_url("http://h:1?x=1"), ("http://h:1/", "/?x=1"))
+  assert_eq(split_url("http://h:1/a?x=1#f"), ("http://h:1/", "/a?x=1"))
 }

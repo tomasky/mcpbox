@@ -4,17 +4,24 @@
 
 ///|
 /// Parse an integer, or `None` when the text is not one.
-fn try_int(raw : String) -> Int? {
+fn try_int(raw : String) -> Int32? {
   Some(@string.parse_int(raw.trim())) catch {
     _ => None
   }
 }
 
 ///|
-/// Parse a double, or `None` when the text is not one.
+/// Parse a finite double, or `None` when the text is not one. Non-JSON numeric
+/// tokens such as `Infinity` and `NaN` stay strings: serialising them as JSON
+/// numbers would emit invalid JSON (or, in JavaScript, `null`).
 fn try_double(raw : String) -> Double? {
-  Some(@string.parse_double(raw.trim())) catch {
-    _ => None
+  let value : Double = @string.parse_double(raw.trim()) catch {
+    _ => return None
+  }
+  if value.is_nan() || value.is_inf() {
+    None
+  } else {
+    Some(value)
   }
 }
 

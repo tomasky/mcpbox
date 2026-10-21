@@ -177,3 +177,54 @@ test "config_candidates reads ~/.mcpbox.json before the XDG file" {
   assert_true(home_index < xdg_index)
   assert_eq(candidates[home_index].key, "mcpServers")
 }
+
+///|
+test "resolve_config_path trims and expands an explicit path" {
+  @env.set_env_var("HOME", "/tmp/mcpbox-home-test")
+  assert_eq(
+    resolve_config_path("  ~/custom.json  "),
+    "/tmp/mcpbox-home-test/custom.json",
+  )
+  assert_eq(resolve_config_path("  ./local.json "), "./local.json")
+  @env.unset_env_var("HOME")
+}
+
+///|
+test "resolve_cwd anchors relative paths at the config file" {
+  assert_eq(resolve_cwd("src", "/repo/config/mcpbox.json"), "/repo/config/src")
+  assert_eq(resolve_cwd("/var/tmp", "/repo/mcpbox.json"), "/var/tmp")
+  assert_eq(resolve_cwd("", "/repo/mcpbox.json"), "")
+}
+
+///|
+test "server_matches_filter supports substrings and bounded globs" {
+  assert_true(server_matches_filter("local-one", "one"))
+  assert_true(server_matches_filter("local-one", "local-*"))
+  assert_false(server_matches_filter("local-one", "local-*two"))
+  assert_true(server_matches_filter("local.one", "local.*"))
+  assert_true(server_matches_filter("local-one", "local-?ne"))
+  assert_true(server_matches_filter("local-one", "**al**o**"))
+  assert_false(server_matches_filter("local-one", "*missing?"))
+  assert_eq(server_matches_filter("local.one", "local."), true)
+  assert_true(server_matches_filter("local.one", "local*."))
+  assert_false(server_matches_filter("local-one", "local."))
+}
+
+///|
+test "server_matches_filter finishes a pathological glob quickly" {
+  let name = "a".repeat(2000)
+  assert_false(server_matches_filter(name, "*a*a*a*a*a*a*a*a*a*z"))
+}
+
+///|
+test "servers_from_document resolves a relative cwd" {
+  let server = parse_server(
+    "x",
+    parse_jsonc("{\"command\":\"run\",\"cwd\":\"work\"}"),
+    "/repo/mcpbox.json",
+  )
+  match server.kind {
+    Stdio(spec) => assert_eq(spec.cwd, "/repo/work")
+    _ => abort("expected a stdio server")
+  }
+}

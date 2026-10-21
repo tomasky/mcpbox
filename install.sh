@@ -2,7 +2,7 @@
 # mcpbox installer — https://github.com/tomasky/mcpbox
 #
 #   curl -LsSf https://raw.githubusercontent.com/tomasky/mcpbox/master/install.sh | bash
-#   curl -LsSf https://raw.githubusercontent.com/tomasky/mcpbox/master/install.sh | bash -s -- --version 0.1.1
+#   curl -LsSf https://raw.githubusercontent.com/tomasky/mcpbox/master/install.sh | bash -s -- --version 0.1.4
 #
 # Environment overrides:
 #   MCPBOX_VERSION        release version to install (default: latest)
@@ -25,7 +25,7 @@ Usage:
   install.sh [options]
 
 Options:
-  -v, --version <version>       install a specific version (e.g. 0.1.1)
+  -v, --version <version>       install a specific version (e.g. 0.1.4)
   -b, --install-dir <dir>       install into <dir> (default: ~/.local/bin)
       --no-verify               skip SHA-256 checksum verification
   -h, --help                    show this help

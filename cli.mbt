@@ -9,7 +9,7 @@ priv struct Options {
   mut brief : Bool
   mut raw : Bool
   mut help : Bool
-  mut timeout_ms : Int
+  mut timeout_ms : Int32
   mut http_url : String?
   mut stdio : String?
   positional : Array[String]
@@ -45,15 +45,24 @@ fn tail(args : Array[String]) -> Array[String] {
 }
 
 ///|
-/// Parse a number of seconds into milliseconds.
-fn parse_seconds(text : String) -> Int raise McpError {
+/// Parse a number of seconds into milliseconds. The timeout must be a finite
+/// positive duration that fits in an `Int`; `Infinity` and `NaN` are rejected
+/// rather than silently becoming a zero or negative deadline.
+fn parse_seconds(text : String) -> Int32 raise McpError {
   let seconds = @string.parse_double(text.trim()) catch {
     _ => raise fail("'\{text}' is not a number of seconds")
   }
-  if seconds <= 0.0 {
-    raise fail("the timeout must be positive")
+  if seconds.is_nan() || seconds.is_inf() || seconds <= 0.0 {
+    raise fail("the timeout must be a positive, finite number of seconds")
   }
-  (seconds * 1000.0).to_int()
+  let millis = seconds * 1000.0
+  if millis < 1.0 {
+    raise fail("the timeout must be at least 0.001 seconds")
+  }
+  if millis > 2147483647.0 {
+    raise fail("the timeout is too large")
+  }
+  millis.to_int()
 }
 
 ///|
@@ -290,7 +299,7 @@ fn find_tool(tools : Array[Tool], name : String) -> Tool? {
 ///|
 /// Connect to a server and collect its tools, converting any failure into a
 /// report rather than an exception so one broken server does not hide the rest.
-async fn fetch_server(server : Server, timeout_ms : Int) -> ServerReport {
+async fn fetch_server(server : Server, timeout_ms : Int32) -> ServerReport {
   let report : ServerReport = { server, info: None, tools: [], error: None, }
   with_server(server, timeout_ms, session => {
     report.info = Some(session.server_info())
@@ -403,7 +412,13 @@ async fn cmd_config(args : Array[String]) -> Unit raise Error {
     return
   }
   let files = config_files()
-  let servers = resolve_servers(opts)
+  let all_servers = resolve_servers(opts)
+  let servers : Array[Server] = []
+  for server in all_servers {
+    if server_matches_filters(server.name, opts.positional) {
+      servers.push(server)
+    }
+  }
   if opts.json {
     let file_json : Array[Json] = []
     for file in files {
@@ -436,7 +451,11 @@ async fn cmd_config(args : Array[String]) -> Unit raise Error {
   print_line("")
   print_line("servers:")
   if servers.length() == 0 {
-    print_line("  (none)")
+    if all_servers.length() == 0 {
+      print_line("  (none)")
+    } else {
+      print_line("  (no servers match the filter)")
+    }
   }
   for server in servers {
     print_line(
@@ -483,7 +502,7 @@ pub fn help_text() -> String {
     "  call <server>.<tool> [args]    call a tool; args are key=value pairs\n",
   )
   out.write_string(
-    "  config                         show config files and resolved servers\n",
+    "  config [filter ...]            show config files and resolved servers\n",
   )
   out.write_string("  version                        print the version\n")
   out.write_string("  help                           show this help\n")
@@ -509,6 +528,9 @@ pub fn help_text() -> String {
     "  key=value              value is coerced using the tool's schema\n",
   )
   out.write_string("  key:=<json>            value is taken as raw JSON\n")
+  out.write_string(
+    "  --                     stop option parsing; later words are arguments\n",
+  )
   out.write_string("\n")
   out.write_string("Config:\n")
   out.write_string(
@@ -521,5 +543,8 @@ pub fn help_text() -> String {
     "  Cursor, Claude Code/Desktop, Windsurf and VS Code. Set MCPBOX_CONFIG to\n",
   )
   out.write_string("  override.\n")
+  out.write_string(
+    "  config filters match name substrings; * and ? are wildcards.\n",
+  )
   out.to_string()
 }

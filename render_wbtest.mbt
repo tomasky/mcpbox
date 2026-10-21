@@ -62,6 +62,74 @@ test "coerce_value without a schema stays a string" {
 }
 
 ///|
+test "coerce_value keeps non-finite numeric tokens as strings" {
+  let number = Some(parse_jsonc("{\"type\":\"number\"}"))
+  let integer = Some(parse_jsonc("{\"type\":\"integer\"}"))
+  for token in ["Infinity", "-Infinity", "NaN", "nan"] {
+    assert_eq(coerce_value(token, number).stringify(), "\"" + token + "\"")
+    assert_eq(coerce_value(token, integer).stringify(), "\"" + token + "\"")
+  }
+}
+
+///|
+test "coerce_value accepts finite exponent notation" {
+  assert_eq(
+    coerce_value("1e3", Some(parse_jsonc("{\"type\":\"number\"}"))).stringify(),
+    "1000",
+  )
+}
+
+///|
+test "build_arguments never emits non-finite JSON numbers" {
+  let schema = parse_jsonc(
+    "{\"type\":\"object\",\"properties\":{\"n\":{\"type\":\"number\"}}}",
+  )
+  let args = build_arguments(["n=Infinity"], schema)
+  assert_eq(json_field(args, "n").stringify(), "\"Infinity\"")
+  let encoded = args.stringify()
+  assert_true(encoded.contains("\"Infinity\""))
+  assert_false(encoded.contains(":Infinity"))
+}
+
+///|
+test "build_arguments preserves an explicit JSON null" {
+  let schema = parse_jsonc(
+    "{\"type\":\"object\",\"properties\":{\"n\":{\"type\":\"string\"}}}",
+  )
+  let args = build_arguments(["n:=null"], schema)
+  assert_eq(json_field(args, "n").stringify(), "null")
+}
+
+///|
+test "parse_options keeps literal values after the separator" {
+  let opts = parse_options([
+    "call", "s.t", "--json", "--", "", "--output", "--timeout", "5",
+  ])
+  assert_true(opts.json)
+  assert_eq(opts.timeout_ms, 30000)
+  assert_eq(opts.positional.length(), 6)
+  assert_eq(opts.positional[2], "")
+  assert_eq(opts.positional[3], "--output")
+  assert_eq(opts.positional[4], "--timeout")
+  assert_eq(opts.positional[5], "5")
+}
+
+///|
+test "parse_seconds rejects non-finite and non-positive timeouts" {
+  for value in ["0", "-1", "Infinity", "-Infinity", "NaN", "0.0001", "abc"] {
+    let failed = try {
+      ignore(parse_seconds(value))
+      false
+    } catch {
+      _ => true
+    }
+    assert_true(failed)
+  }
+  assert_eq(parse_seconds("0.5"), 500)
+  assert_eq(parse_seconds("30"), 30000)
+}
+
+///|
 test "build_arguments coerces known keys and accepts raw JSON" {
   let schema = parse_jsonc(
     "{\"type\":\"object\",\"properties\":{\"n\":{\"type\":\"integer\"},\"m\":{\"type\":\"object\"},\"s\":{\"type\":\"string\"}}}",
