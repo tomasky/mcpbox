@@ -184,12 +184,17 @@ fn parse_options(args : Array[String]) -> Options raise McpError {
 /// The ad-hoc server described by `--http-url` or `--stdio`, if any.
 fn adhoc_server(opts : Options) -> Server? raise McpError {
   match opts.http_url {
-    Some(url) =>
+    Some(url) => {
+      let can_connect = url.has_prefix("http://") || url.has_prefix("https://")
+      if !can_connect {
+        raise fail("'\{url}' should start with http:// or https://")
+      }
       return Some({
         name: "adhoc",
         kind: Http({ url, headers: Map([]), }),
         note: "ad-hoc --http-url",
       })
+    }
     None => ()
   }
   match opts.stdio {

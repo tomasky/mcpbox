@@ -233,3 +233,36 @@ test "split_url keeps query strings and drops fragments" {
   assert_eq(split_url("http://h:1?x=1"), ("http://h:1/", "/?x=1"))
   assert_eq(split_url("http://h:1/a?x=1#f"), ("http://h:1/", "/a?x=1"))
 }
+
+///|
+test "url_origin folds default ports" {
+  assert_eq(url_origin("https://example.com/x"), "https://example.com")
+  assert_eq(url_origin("https://example.com:443/x"), "https://example.com")
+  assert_eq(url_origin("http://example.com:80/x"), "http://example.com")
+  assert_eq(
+    url_origin("https://example.com:8443/x"),
+    "https://example.com:8443",
+  )
+  assert_eq(url_origin("http://example.com:8080/x"), "http://example.com:8080")
+}
+
+///|
+test "resolve_redirect_url normalises dot segments" {
+  assert_eq(
+    resolve_redirect_url("http://h/a/b/c/mcp", "../up"),
+    "http://h/a/b/up",
+  )
+  assert_eq(
+    resolve_redirect_url("http://h/a/b/mcp", "./next"),
+    "http://h/a/b/next",
+  )
+}
+
+///|
+test "http request bodies are measured in utf-8 bytes" {
+  let args = Json::object({ "name": Json::string("héllo💩") })
+  let body = args.stringify()
+  // A Chinese/emoji payload must not be measured in UTF-16 code units:
+  // Content-Length has to agree with the bytes the HTTP client writes.
+  assert_eq(@utf8.encode(body).length() > body.length(), true)
+}

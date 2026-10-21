@@ -54,6 +54,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 "$BIN" list --http-url "http://127.0.0.1:$PORT/mcp"
 "$BIN" call adhoc.echo --http-url "http://127.0.0.1:$PORT/mcp" name=hi
+# A non-ASCII argument exercises UTF-8 Content-Length accounting.
+"$BIN" call adhoc.echo --http-url "http://127.0.0.1:$PORT/mcp" "name=héllo 💩"
 
 # A 307 redirect must keep the POST method and body.
 "$BIN" list --http-url "http://127.0.0.1:$PORT/redirect"

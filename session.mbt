@@ -534,6 +534,12 @@ async fn http_request(
   if code >= 400 {
     raise fail("'\{name}' returned HTTP \{code}: \{body}")
   }
+  if code >= 300 {
+    // Redirects that can be followed were followed inside `http_exchange`, so
+    // what remains here is an oddball status like `300` or `304 (no body)`,
+    // whose body is not a JSON-RPC response.
+    raise fail("'\{name}' returned HTTP \{code} instead of a response")
+  }
   let payloads = sse_events(body)
   let mut parsed_any = false
   for payload in payloads {
@@ -654,9 +660,15 @@ async fn http_send_once(
     @http.Get | @http.Head => false
     _ => true
   }
-  if is_body_request && body.length() > 0 {
+  // Encode the body once, as UTF-8 bytes. `String::length()` counts UTF-16
+  // code units, so it is wrong for non-ASCII tool arguments (a Chinese payload
+  // is 3 bytes each, emoji 4); `Content-Length` must be the byte count or the
+  // HTTP client rejects the length mismatch with `IncorrectBodyLength`.
+  let payload : Bytes = if is_body_request { @utf8.encode(body) } else { [] }
+  let has_payload = payload.length() > 0
+  if has_payload {
     headers[@http.CaseInsensitiveString("content-type")] = "application/json"
-    headers[@http.CaseInsensitiveString("content-length")] = body
+    headers[@http.CaseInsensitiveString("content-length")] = payload
       .length()
       .to_string()
   }
@@ -687,10 +699,10 @@ async fn http_send_once(
     () => {
       let client = @http.Client::Client(origin)
       defer client.close()
-      let response = if is_body_request && body.length() > 0 {
+      let response = if has_payload {
         client
         ..request(request_method, path, extra_headers=headers)
-        ..write(body)
+        ..write(payload)
         .end_request()
       } else {
         client
@@ -774,7 +786,17 @@ fn url_origin(url : String) -> String {
   }
   let scheme = url.exact_view(end=scheme_end).to_owned()
   let authority = url.exact_view(start=scheme_end, end~).to_owned()
-  scheme.to_lower() + authority.to_lower()
+  let scheme = scheme.to_lower()
+  let authority = authority.to_lower()
+  // Fold the default port away so a redirect that makes `:443` explicit (or
+  // drops it) still counts as the same origin.
+  if scheme.has_prefix("http:") && authority.has_suffix(":80") {
+    "http://" + authority[:authority.length() - 3].to_owned()
+  } else if scheme.has_prefix("https:") && authority.has_suffix(":443") {
+    "https://" + authority[:authority.length() - 4].to_owned()
+  } else {
+    scheme + authority
+  }
 }
 
 ///|
@@ -859,7 +881,9 @@ fn resolve_redirect_url(base : String, location : String) -> String {
     Some(index) => path.exact_view(end=index + 1).to_owned()
     None => "/"
   }
-  origin + dir + loc
+  // Normalise dot segments (`../next`) against the base path; origin only.
+  let joined = @path.Path(dir + loc).normalize().to_string()
+  origin + joined
 }
 
 ///|
