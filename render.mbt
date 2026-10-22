@@ -120,6 +120,26 @@ pub fn server_info_to_json(info : ServerInfo) -> Json {
 }
 
 ///|
+/// The names-only discovery view. This path never connects to a server.
+fn render_server_names(servers : Array[Server]) -> String {
+  let names : Array[String] = []
+  for server in servers {
+    names.push(server.name)
+  }
+  names.join("\n")
+}
+
+///|
+/// The JSON view of configured servers without contacting any of them.
+fn render_servers_json(servers : Array[Server]) -> String {
+  let items : Array[Json] = []
+  for server in servers {
+    items.push(server_to_json(server))
+  }
+  Json::object({ "servers": Json::array(items) }).stringify(indent=2)
+}
+
+///|
 /// Render the `mcpbox list` result as JSON.
 fn render_reports_json(reports : Array[ServerReport]) -> String {
   let servers : Array[Json] = []
@@ -175,13 +195,32 @@ fn render_reports_text(reports : Array[ServerReport], opts : Options) -> String 
       None => ()
     }
     out.write_string("\n")
+    if !opts.no_docs {
+      match report.info {
+        Some(info) =>
+          for line in render_instructions(info.instructions, "  ") {
+            out.write_string(line + "\n")
+          }
+        None => ()
+      }
+    }
     match report.error {
       Some(message) => out.write_string("  error: " + message + "\n")
       None =>
         if report.tools.length() == 0 {
           out.write_string("  (no tools)\n")
         } else {
+          let mut first_tool = true
           for tool in report.tools {
+            if !first_tool && !opts.no_docs {
+              out.write_string("\n")
+            }
+            first_tool = false
+            if !opts.no_docs {
+              for line in render_tool_doc(tool, "  ") {
+                out.write_string(line + "\n")
+              }
+            }
             out.write_string("  " + render_tool_signature(tool) + "\n")
           }
         }

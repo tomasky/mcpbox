@@ -1,6 +1,6 @@
 {
   "name": "@tomasko/mcpbox",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Carry Model Context Protocol tools into scripts, CLIs and agents — a self-contained MCP client in the spirit of mcporter.",
   "license": "Apache-2.0",
   "bin": {

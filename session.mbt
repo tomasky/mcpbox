@@ -162,6 +162,158 @@ async fn with_http_session(
 }
 
 ///|
+/// A session that outlives the call that created it, for the resident daemon.
+///
+/// `with_server` ties a session to a callback so cleanup is automatic. The
+/// daemon instead keeps one `LiveSession` per server between commands, which is
+/// where the startup saving comes from: the child process is spawned once
+/// rather than once per `mcpbox list` or `mcpbox call`.
+///
+/// A stdio child is started as an orphan, so it stays alive when the task that
+/// spawned it returns. Shutdown closes stdin first, then escalates to signals
+/// if the child does not exit voluntarily.
+pub struct LiveSession {
+  session : Session
+  priv mut pid : Int32?
+  priv mut closed : Bool
+}
+
+///|
+/// The session inside, for listing tools and making calls.
+pub fn LiveSession::session(self : LiveSession) -> Session {
+  self.session
+}
+
+///|
+/// Connect and handshake without owning the transport for a callback's
+/// lifetime. The caller must eventually call `LiveSession::close`; the daemon
+/// does so when a server is stopped.
+pub async fn open_live_session(
+  server : Server,
+  timeout_ms : Int32,
+  inherit_env~ : Bool = true,
+) -> LiveSession raise Error {
+  match server.kind {
+    Http(spec) => {
+      let link = { url: spec.url, headers: spec.headers, session_id: None, }
+      let session = Session::connect(server.name, Link::Http(link))
+      let outcome : Result[Unit, Error] = try {
+        session.initialize(timeout_ms)
+        Ok(())
+      } catch {
+        error => Err(error)
+      }
+      match outcome {
+        Ok(_) => ()
+        Err(error) => {
+          session.close()
+          raise error
+        }
+      }
+      { session, pid: None, closed: false, }
+    }
+    Stdio(spec) => {
+      let (stdin_pipe, stdin_writer) = @process.write_to_process() catch {
+        e =>
+          raise fail(
+            "cannot create a pipe for '\{server.name}': \{e.to_string()}",
+          )
+      }
+      let (stdout_reader, stdout_pipe) = @process.read_from_process() catch {
+        e => {
+          stdin_writer.close()
+          raise fail(
+            "cannot create a pipe for '\{server.name}': \{e.to_string()}",
+          )
+        }
+      }
+      let cwd : StringView? = if spec.cwd.length() > 0 {
+        Some(spec.cwd)
+      } else {
+        None
+      }
+      // Standard error is inherited, so it lands in the daemon's log file.
+      // Giving the child a pipe nobody drains would eventually block it.
+      let pid = @process.spawn_orphan(
+        spec.command,
+        spec.args,
+        extra_env=spec.env,
+        stdin=stdin_pipe,
+        stdout=stdout_pipe,
+        inherit_env~,
+        cwd?,
+      ) catch {
+        e => {
+          stdin_writer.close()
+          stdout_reader.close()
+          raise fail("cannot start '\{server.name}': \{e.to_string()}")
+        }
+      }
+      let link = { stdin: stdin_writer, stdout: stdout_reader, stderr_log: [], }
+      let session = Session::connect(server.name, Link::Stdio(link))
+      let outcome : Result[Unit, Error] = try {
+        session.initialize(timeout_ms)
+        Ok(())
+      } catch {
+        e => Err(e)
+      }
+      match outcome {
+        Ok(_) => { session, pid: Some(pid), closed: false, }
+        Err(e) => {
+          session.close()
+          stdout_reader.close()
+          reap_live_child(pid)
+          raise e
+        }
+      }
+    }
+  }
+}
+
+///|
+/// Tear the transport down and reap the child, escalating if it ignores EOF.
+/// Calling this twice is harmless.
+pub async fn LiveSession::close(self : LiveSession) -> Unit {
+  if self.closed {
+    return
+  }
+  self.closed = true
+  self.session.close()
+  match self.session.link {
+    Stdio(link) => link.stdout.close()
+    Http(_) => ()
+  }
+  match self.pid {
+    Some(pid) => {
+      self.pid = None
+      reap_live_child(pid)
+    }
+    None => ()
+  }
+}
+
+///|
+async fn reap_live_child(pid : Int32) -> Unit {
+  let exited = @async.with_timeout_opt(3000, () => @process.wait_pid(pid)) catch {
+    _ => Some(0)
+  }
+  if exited is Some(_) {
+    return
+  }
+  mcpbox_signal_child(pid, 15)
+  let terminated = @async.with_timeout_opt(1000, () => @process.wait_pid(pid)) catch {
+    _ => Some(0)
+  }
+  if terminated is Some(_) {
+    return
+  }
+  mcpbox_signal_child(pid, 9)
+  ignore(@async.with_timeout_opt(1000, () => @process.wait_pid(pid))) catch {
+    _ => ()
+  }
+}
+
+///|
 /// Run the MCP `initialize` handshake and the `initialized` notification.
 async fn Session::initialize(
   self : Session,

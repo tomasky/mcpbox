@@ -57,6 +57,11 @@ jobs:
           moon build --target native
           tests/integration.sh
 
+      # The daemon is stateful (lock file, endpoint, warm child processes), so
+      # its lifecycle needs a real binary and a real stdio server.
+      - name: Integration (background daemon)
+        run: tests/daemon.sh _build/native/debug/build/cmd/mcpbox/mcpbox.exe
+
   shellcheck:
     name: lint shell scripts
     runs-on: ubuntu-latest
@@ -66,7 +71,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          shellcheck install.sh tests/integration.sh scripts/*.sh
+          shellcheck install.sh tests/integration.sh tests/daemon.sh scripts/*.sh
 
   npm:
     name: lint the npm wrapper

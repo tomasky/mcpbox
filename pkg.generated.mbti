@@ -32,6 +32,8 @@ pub async fn main_cli() -> Unit
 
 pub fn mcpbox_exit(Int32) -> Unit
 
+pub async fn open_live_session(Server, Int32, inherit_env? : Bool) -> LiveSession
+
 pub fn parse_call_result(Json) -> CallResult raise McpError
 
 pub fn parse_content(Json) -> Content
@@ -46,7 +48,11 @@ pub let protocol_version : String
 
 pub fn render_call_result(CallResult) -> String
 
+pub fn render_instructions(String, String) -> Array[String]
+
 pub fn render_params(Json) -> String
+
+pub fn render_tool_doc(Tool, String) -> Array[String]
 
 pub fn render_tool_signature(Tool) -> String
 
@@ -59,6 +65,10 @@ pub fn rpc_request(Int32, String, Json?) -> Json
 pub fn rpc_result_response(Json, Json) -> Json
 
 pub async fn run(Array[String]) -> Unit
+
+pub fn schema_choices(Json) -> String
+
+pub fn schema_description(Json) -> String
 
 pub fn schema_properties(Json) -> Map[String, Json]
 
@@ -107,6 +117,13 @@ pub(all) struct HttpSpec {
   headers : Map[String, String]
 } derive(@debug.Debug)
 pub fn HttpSpec::to_repr(Self) -> @debug.Repr
+
+pub struct LiveSession {
+  session : Session
+  // private fields
+}
+pub async fn LiveSession::close(Self) -> Unit
+pub fn LiveSession::session(Self) -> Session
 
 pub(all) struct RpcError {
   code : Int32

@@ -96,4 +96,15 @@ printf '%s\n' "$FILTERED" | grep -q "$CONFIG" || {
 MCPBOX_CONFIG="$CONFIG" "$BIN" config --json 'b?ta' | grep -q '"name": "beta"'
 
 echo
+echo "== discovery starts nothing =="
+DISCOVERED="$(MCPBOX_CONFIG="$CONFIG" "$BIN" list)"
+printf '%s\n' "$DISCOVERED" | grep -qx alpha
+printf '%s\n' "$DISCOVERED" | grep -qx beta
+if printf '%s\n' "$DISCOVERED" | grep -q 'echo'; then
+  echo "error: bare list contacted servers instead of only printing names" >&2
+  printf '%s\n' "$DISCOVERED" >&2
+  exit 1
+fi
+
+echo
 echo "integration ok"

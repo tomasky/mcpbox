@@ -8,6 +8,10 @@ priv struct Options {
   mut json : Bool
   mut brief : Bool
   mut raw : Bool
+  mut no_docs : Bool
+  mut all_servers : Bool
+  mut background : Bool
+  mut quiet : Bool
   mut help : Bool
   mut timeout_ms : Int32
   mut http_url : String?
@@ -115,6 +119,10 @@ fn parse_options(args : Array[String]) -> Options raise McpError {
     json: false,
     brief: false,
     raw: false,
+    no_docs: false,
+    all_servers: false,
+    background: false,
+    quiet: false,
     help: false,
     timeout_ms: 30000,
     http_url: None,
@@ -139,6 +147,18 @@ fn parse_options(args : Array[String]) -> Options raise McpError {
       i += 1
     } else if arg == "--raw" {
       opts.raw = true
+      i += 1
+    } else if arg == "--no-docs" {
+      opts.no_docs = true
+      i += 1
+    } else if arg == "--all" {
+      opts.all_servers = true
+      i += 1
+    } else if arg == "-b" || arg == "--background" {
+      opts.background = true
+      i += 1
+    } else if arg == "--quiet" || arg == "-q" {
+      opts.quiet = true
       i += 1
     } else if arg == "--timeout" {
       if i + 1 >= args.length() {
@@ -304,28 +324,71 @@ fn find_tool(tools : Array[Tool], name : String) -> Tool? {
 ///|
 /// Connect to a server and collect its tools, converting any failure into a
 /// report rather than an exception so one broken server does not hide the rest.
-async fn fetch_server(server : Server, timeout_ms : Int32) -> ServerReport {
+async fn fetch_server(
+  server : Server,
+  opts : Options,
+  daemon : DaemonLocator?,
+) -> ServerReport {
   let report : ServerReport = { server, info: None, tools: [], error: None, }
-  with_server(server, timeout_ms, session => {
-    report.info = Some(session.server_info())
-    report.tools = session.list_tools(timeout_ms)
-  }) catch {
+  server_progress(opts, "connecting to '\{server.name}'…")
+  try {
+    match daemon {
+      Some(locator) => {
+        let result = daemon_request(
+          locator,
+          daemon_work("list", server, opts),
+          opts.timeout_ms,
+        )
+        report.info = Some(parse_server_info(result))
+        report.tools = parse_tools(result)
+      }
+      None =>
+        with_server(server, opts.timeout_ms, session => {
+          report.info = Some(session.server_info())
+          report.tools = session.list_tools(opts.timeout_ms)
+        })
+    }
+  } catch {
     error => report.error = Some(error_text(error))
   }
   report
 }
 
 ///|
-/// `mcpbox list [server ...]`
+/// `mcpbox list [server ...] [--all]`
+///
+/// Without `--all`, no server is started: the default path only prints the
+/// configured names so discovery stays instant. `--all` opts into connecting
+/// to every server and showing its tools.
 async fn cmd_list(args : Array[String]) -> Unit raise Error {
   let opts = parse_options(args)
   if opts.help {
     print_line(help_text())
     return
   }
+  if opts.all_servers && opts.positional.length() > 0 {
+    raise fail("--all lists every server; do not also name servers")
+  }
+  let has_adhoc = adhoc_server(opts) is Some(_)
   let servers = resolve_servers(opts)
+  if !opts.all_servers && !has_adhoc && opts.positional.length() == 0 {
+    if servers.length() == 0 {
+      if opts.json {
+        print_line(Json::object({ "servers": Json::array([]) }).stringify())
+      } else {
+        print_line("no MCP servers configured")
+      }
+      return
+    }
+    if opts.json {
+      print_line(render_servers_json(servers))
+    } else {
+      print_line(render_server_names(servers))
+    }
+    return
+  }
   let selected : Array[Server] = []
-  if opts.positional.length() == 0 {
+  if opts.all_servers || opts.positional.length() == 0 {
     for server in servers {
       selected.push(server)
     }
@@ -348,11 +411,24 @@ async fn cmd_list(args : Array[String]) -> Unit raise Error {
     }
     return
   }
+  let daemon = daemon_for_command(opts)
   let tasks : Array[async () -> ServerReport] = []
   for server in selected {
-    tasks.push(() => fetch_server(server, opts.timeout_ms))
+    tasks.push(() => fetch_server(server, opts, daemon))
   }
-  let reports = @async.all(tasks)
+  let reports = if interactive_progress(opts) {
+    let label = "starting " +
+      selected.length().to_string() +
+      " MCP server(s)…"
+    let reports = @async.with_task_group(group => {
+      group.spawn_bg(no_wait=true, () => spinner_loop(label))
+      @async.all(tasks)
+    })
+    clear_progress_line()
+    reports
+  } else {
+    @async.all(tasks)
+  }
   if opts.json {
     print_line(render_reports_json(reports))
   } else {
@@ -385,27 +461,82 @@ async fn cmd_call(args : Array[String]) -> Unit raise Error {
   for i in 1..<opts.positional.length() {
     pairs.push(opts.positional[i])
   }
-  with_server(server, opts.timeout_ms, session => {
-    let tools = session.list_tools(opts.timeout_ms)
-    let tool = match find_tool(tools, tool_name) {
-      Some(tool) => tool
-      None =>
-        raise fail(
-          "'" +
-          server_name +
-          "' has no tool named '" +
-          tool_name +
-          "'" +
-          available_tools(tools),
-        )
+  let daemon = daemon_for_command(opts)
+  if interactive_progress(opts) {
+    let label = "calling \{server.name}.\{tool_name}…"
+    let outcome : Result[Unit, Error] = try {
+      @async.with_task_group(group => {
+        group.spawn_bg(no_wait=true, () => spinner_loop(label))
+        perform_call(server, server_name, tool_name, pairs, opts, daemon)
+      })
+      Ok(())
+    } catch {
+      error => Err(error)
     }
-    let arguments = build_arguments(pairs, tool.input_schema)
-    let result = session.call_tool(tool_name, arguments, opts.timeout_ms)
-    print_line(render_call_output(result, opts))
-    if result.is_error {
-      raise fail("tool '\{tool_name}' reported an error")
+    clear_progress_line()
+    match outcome {
+      Ok(_) => ()
+      Err(error) => raise error
     }
-  })
+  } else {
+    startup_progress(
+      opts,
+      "connecting to '\{server.name}' and calling '\{tool_name}'…",
+    )
+    perform_call(server, server_name, tool_name, pairs, opts, daemon)
+  }
+}
+
+///|
+/// Connect (or reuse the daemon) and run one tool call. Split out so `call`
+/// can wrap it in the same spinner as `list`.
+async fn perform_call(
+  server : Server,
+  server_name : String,
+  tool_name : String,
+  pairs : Array[String],
+  opts : Options,
+  daemon : DaemonLocator?,
+) -> Unit raise Error {
+  match daemon {
+    Some(locator) => {
+      let request = daemon_work("call", server, opts)
+      guard request is Object(fields) else {
+        raise fail("invalid daemon request")
+      }
+      fields["tool"] = Json::string(tool_name)
+      fields["pairs"] = Json::array(pairs.map(pair => Json::string(pair)))
+      let result = parse_call_result(
+        daemon_request(locator, request, opts.timeout_ms),
+      )
+      print_line(render_call_output(result, opts))
+      if result.is_error {
+        raise fail("tool '\{tool_name}' reported an error")
+      }
+    }
+    None =>
+      with_server(server, opts.timeout_ms, session => {
+        let tools = session.list_tools(opts.timeout_ms)
+        let tool = match find_tool(tools, tool_name) {
+          Some(tool) => tool
+          None =>
+            raise fail(
+              "'" +
+              server_name +
+              "' has no tool named '" +
+              tool_name +
+              "'" +
+              available_tools(tools),
+            )
+        }
+        let arguments = build_arguments(pairs, tool.input_schema)
+        let result = session.call_tool(tool_name, arguments, opts.timeout_ms)
+        print_line(render_call_output(result, opts))
+        if result.is_error {
+          raise fail("tool '\{tool_name}' reported an error")
+        }
+      })
+  }
 }
 
 ///|
@@ -485,6 +616,8 @@ pub async fn run(args : Array[String]) -> Unit raise Error {
     "list" | "ls" | "tools" => cmd_list(rest)
     "call" => cmd_call(rest)
     "config" => cmd_config(rest)
+    "stop" => cmd_stop(rest)
+    "__daemon" => daemon_main()
     _ => raise fail("unknown command '\{command}' (try 'mcpbox help')")
   }
 }
@@ -501,7 +634,7 @@ pub fn help_text() -> String {
   out.write_string("\n")
   out.write_string("Commands:\n")
   out.write_string(
-    "  list [server ...]              list configured servers and their tools\n",
+    "  list [server ...]              list configured server names; --all shows tools\n",
   )
   out.write_string(
     "  call <server>.<tool> [args]    call a tool; args are key=value pairs\n",
@@ -509,12 +642,25 @@ pub fn help_text() -> String {
   out.write_string(
     "  config [filter ...]            show config files and resolved servers\n",
   )
+  out.write_string(
+    "  stop <server|all>              stop kept-alive servers (all also exits daemon)\n",
+  )
   out.write_string("  version                        print the version\n")
   out.write_string("  help                           show this help\n")
   out.write_string("\n")
   out.write_string("Options:\n")
   out.write_string("  --json                 machine-readable output\n")
   out.write_string("  --brief                names only, for list\n")
+  out.write_string(
+    "  --no-docs              signatures without tool documentation\n",
+  )
+  out.write_string(
+    "  --all                  with list, start every server and show its tools\n",
+  )
+  out.write_string(
+    "  -b, --background       start daemon and keep server sessions alive\n",
+  )
+  out.write_string("  -q, --quiet            hide startup messages on stderr\n")
   out.write_string("  --raw                  text content only, for call\n")
   out.write_string(
     "  --timeout <seconds>    per-request timeout (default 30)\n",

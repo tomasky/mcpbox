@@ -96,6 +96,196 @@ pub fn render_tool_signature(tool : Tool) -> String {
 }
 
 ///|
+/// Target width of a tool doc comment, including indentation and markers.
+/// An unbroken word may exceed this width.
+const DOC_WIDTH : Int32 = 80
+
+///|
+/// Split `text` into words, treating any run of whitespace as one separator.
+fn doc_words(text : String) -> Array[String] {
+  let cleaned = StringBuilder()
+  for c in text.to_array() {
+    if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+      cleaned.write_char(' ')
+    } else {
+      cleaned.write_char(c)
+    }
+  }
+  let out : Array[String] = []
+  for raw in cleaned.to_string().split(" ") {
+    let word = raw.to_owned()
+    if word.length() > 0 {
+      out.push(word)
+    }
+  }
+  out
+}
+
+///|
+/// Greedily wrap `text` into lines of at most `width` characters.
+fn wrap_doc(text : String, width : Int32) -> Array[String] {
+  let lines : Array[String] = []
+  let current = StringBuilder()
+  let mut empty = true
+  for word in doc_words(text) {
+    if empty {
+      current.write_string(word)
+      empty = false
+    } else if current.to_string().length() + 1 + word.length() <= width {
+      current.write_string(" ")
+      current.write_string(word)
+    } else {
+      lines.push(current.to_string())
+      current.reset()
+      current.write_string(word)
+    }
+  }
+  if !empty {
+    lines.push(current.to_string())
+  }
+  lines
+}
+
+///|
+/// The `description` of a schema node, if it has one.
+pub fn schema_description(schema : Json) -> String {
+  match schema {
+    Object(obj) =>
+      match obj.get("description") {
+        Some(String(text)) => text
+        _ => ""
+      }
+    _ => ""
+  }
+}
+
+///|
+/// A JSON value as a short bare word: strings lose their quotes.
+fn bare_value(value : Json) -> String {
+  match value {
+    String(text) => text
+    _ => value.stringify()
+  }
+}
+
+///|
+/// The allowed values of an `enum` schema, comma separated.
+pub fn schema_choices(schema : Json) -> String {
+  match schema {
+    Object(obj) =>
+      match obj.get("enum") {
+        Some(Array(items)) => {
+          let parts : Array[String] = []
+          for item in items {
+            parts.push(bare_value(item))
+          }
+          parts.join(", ")
+        }
+        _ => ""
+      }
+    _ => ""
+  }
+}
+
+///|
+/// The prose attached to a parameter: its description, then the choices and
+/// default so a caller can see the whole contract of the argument.
+fn param_doc(schema : Json) -> String {
+  let parts : Array[String] = []
+  let description = schema_description(schema).trim().to_owned()
+  if description.length() > 0 {
+    parts.push(description)
+  }
+  let choices = schema_choices(schema)
+  if choices.length() > 0 {
+    parts.push("choices: " + choices)
+  }
+  match schema {
+    Object(obj) =>
+      match obj.get("default") {
+        Some(value) => parts.push("default: " + bare_value(value))
+        None => ()
+      }
+    _ => ()
+  }
+  parts.join("; ")
+}
+
+///|
+/// A JSDoc-style comment for a tool: the description, then one `@param` line
+/// per documented argument. This is the shape a TypeScript MCP client shows,
+/// and it turns a bare signature into something a reader can act on. Tools
+/// with nothing to say render no lines at all.
+pub fn render_tool_doc(tool : Tool, indent : String) -> Array[String] {
+  let lines : Array[String] = []
+  let description = tool.description.trim().to_owned()
+  let properties = schema_properties(tool.input_schema)
+  let required = required_names(tool.input_schema)
+  let names = Array::from_iter(properties.keys())
+  names.sort_by((a, b) => a.lexical_compare(b))
+  let documented : Array[String] = []
+  let texts : Array[String] = []
+  for name in names {
+    let text = param_doc(properties.get(name).unwrap_or(Json::null()))
+    if text.length() > 0 {
+      documented.push(name)
+      texts.push(text)
+    }
+  }
+  if description.length() == 0 && documented.length() == 0 {
+    return lines
+  }
+  let available = DOC_WIDTH - indent.length() - 3
+  let width = if available > 0 { available } else { 1 }
+  lines.push(indent + "/**")
+  for line in wrap_doc(description, width) {
+    lines.push(indent + " * " + line)
+  }
+  if description.length() > 0 && documented.length() > 0 {
+    lines.push(indent + " *")
+  }
+  for i in 0..<documented.length() {
+    let label = "@param " +
+      documented[i] +
+      (if required.contains(documented[i]) { "" } else { "?" })
+    let pad = " ".repeat(label.length() + 1)
+    let mut first = true
+    for line in wrap_doc(texts[i], width - label.length() - 1) {
+      if first {
+        lines.push(indent + " * " + label + " " + line)
+        first = false
+      } else {
+        lines.push(indent + " * " + pad + line)
+      }
+    }
+  }
+  lines.push(indent + " */")
+  lines
+}
+
+///|
+/// A server's `instructions` clipped to one readable line, or no lines when it
+/// sent none.
+pub fn render_instructions(text : String, indent : String) -> Array[String] {
+  let normalized = doc_words(text).join(" ")
+  if normalized.length() == 0 {
+    return []
+  }
+  let chars = normalized.to_array()
+  let clipped = if chars.length() > 500 {
+    let out = StringBuilder()
+    for i in 0..<499 {
+      out.write_char(chars[i])
+    }
+    out.write_string("…")
+    out.to_string()
+  } else {
+    normalized
+  }
+  [indent + "Instructions: " + clipped]
+}
+
+///|
 /// The first line of a description, so a table stays one line per tool.
 pub fn first_line(text : String) -> String {
   match text.split_once("\n") {
