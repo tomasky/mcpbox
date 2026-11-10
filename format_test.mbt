@@ -121,3 +121,50 @@ test "coerce_value splits arrays and coerces their items" {
   )
   assert_eq(@mcpbox.coerce_value("1, 2,3", Some(schema)).stringify(), "[1,2,3]")
 }
+
+///|
+/// The left-most separator owns the value, so an `=` inside a colon-style URL
+/// must not split the key.
+test "build_arguments keeps equals signs inside a colon value" {
+  let schema = @json.parse("{\"type\":\"object\",\"properties\":{}}")
+  assert_eq(
+    @mcpbox.build_arguments(["url:http://h/a?b=1&c=2"], schema).stringify(),
+    "{\"url\":\"http://h/a?b=1&c=2\"}",
+  )
+}
+
+///|
+test "build_arguments keeps equals signs inside a plain value" {
+  let schema = @json.parse("{\"type\":\"object\",\"properties\":{}}")
+  assert_eq(
+    @mcpbox.build_arguments(["name=a=b"], schema).stringify(),
+    "{\"name\":\"a=b\"}",
+  )
+}
+
+///|
+test "build_arguments still treats := as the JSON form" {
+  let schema = @json.parse("{\"type\":\"object\",\"properties\":{}}")
+  assert_eq(
+    @mcpbox.build_arguments(["meta:={\"a\":1}"], schema).stringify(),
+    "{\"meta\":{\"a\":1}}",
+  )
+  // Without a schema the bare colon form stays a literal string; the JSON form
+  // above parses it regardless.
+  assert_eq(
+    @mcpbox.build_arguments(["meta:{\"a\":1}"], schema).stringify(),
+    "{\"meta\":\"{\\\"a\\\":1}\"}",
+  )
+}
+
+///|
+test "build_arguments rejects a token with no separator" {
+  let schema = @json.parse("{\"type\":\"object\",\"properties\":{}}")
+  let failed = try {
+    ignore(@mcpbox.build_arguments(["novalue"], schema))
+    false
+  } catch {
+    _ => true
+  }
+  assert_true(failed)
+}

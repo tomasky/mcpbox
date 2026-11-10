@@ -116,6 +116,44 @@ pub fn coerce_value(raw : String, schema : Json?) -> Json {
 }
 
 ///|
+/// The separator that owns a `key=value` token, and whether it is the JSON form.
+///
+/// The left-most separator wins, so `url:http://h/?a=1` keeps the whole URL as
+/// the value instead of splitting on the `=` inside it. `:=` is an alias for
+/// `=` and counts as a single separator, so the `:` in it does not win by
+/// accident.
+///
+/// Returns `(key, value, is_json)`.
+fn split_argument(pair : String) -> (String, String, Bool) raise McpError {
+  let chars = pair.to_array()
+  let eq = pair.find("=")
+  let colon = pair.find(":")
+  // Walk to the first separator, preferring the earlier of the two.
+  let separator = match (eq, colon) {
+    (Some(a), Some(b)) => Some(if a <= b { a } else { b })
+    (Some(a), None) => Some(a)
+    (None, Some(b)) => Some(b)
+    (None, None) => None
+  }
+  guard separator is Some(index) else {
+    raise fail("'" + pair + "' is not a key=value argument")
+  }
+  // `key:=json`: a colon immediately followed by `=`. The value starts after
+  // the `=`, and the key is what came before the `:`.
+  let colon_assign = chars[index] == ':' &&
+    index + 1 < chars.length() &&
+    chars[index + 1] == '='
+  let key_end = index
+  let value_start = if colon_assign { index + 2 } else { index + 1 }
+  let is_json = colon_assign
+  let key = pair.exact_view(end=key_end).to_owned()
+  if key.length() == 0 {
+    raise fail("'" + pair + "' has an empty key")
+  }
+  (key, pair.exact_view(start=value_start).to_owned(), is_json)
+}
+
+///|
 /// Build the `arguments` object for a tool call.
 pub fn build_arguments(
   pairs : Array[String],
@@ -124,27 +162,11 @@ pub fn build_arguments(
   let properties = schema_properties(schema)
   let fields : Map[String, Json] = Map([])
   for pair in pairs {
-    match pair.find(":=") {
-      Some(index) => {
-        let key = pair.exact_view(end=index).to_owned()
-        let raw = pair.exact_view(start=index + 2).to_owned()
-        if key.length() == 0 {
-          raise fail("'" + pair + "' has an empty key")
-        }
-        fields[key] = parse_jsonc(raw)
-      }
-      None =>
-        match pair.find("=") {
-          Some(index) => {
-            let key = pair.exact_view(end=index).to_owned()
-            let raw = pair.exact_view(start=index + 1).to_owned()
-            if key.length() == 0 {
-              raise fail("'" + pair + "' has an empty key")
-            }
-            fields[key] = coerce_value(raw, properties.get(key))
-          }
-          None => raise fail("'" + pair + "' is not a key=value argument")
-        }
+    let (key, raw, is_json) = split_argument(pair)
+    fields[key] = if is_json {
+      parse_jsonc(raw)
+    } else {
+      coerce_value(raw, properties.get(key))
     }
   }
   Json::object(fields)
