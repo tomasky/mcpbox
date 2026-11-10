@@ -31,6 +31,6 @@ description = "A self-contained MCP client CLI for discovering and calling Model
 preferred_target = "native"
 
 import {
-  "moonbitlang/async@0.22.4",
-  "moonbitlang/x@0.5.5",
+  "moonbitlang/async@0.22.9",
+  "moonbitlang/x@0.5.7",
 }

@@ -3,20 +3,21 @@ package "kupas/mcpbox"
 
 import {
   "moonbitlang/core/debug",
+  "moonbitlang/core/json",
 }
 
 // Values
-pub fn build_arguments(Array[String], Json) -> Json raise McpError
+pub fn build_arguments(Array[String], @json.Json) -> @json.Json raise McpError
 
-pub fn call_result_to_json(CallResult) -> Json
+pub fn call_result_to_json(CallResult) -> @json.Json
 
-pub fn coerce_value(String, Json?) -> Json
+pub fn coerce_value(String, @json.Json?) -> @json.Json
 
 pub async fn config_files() -> Array[(String, Int32)] raise McpError
 
-pub fn content_to_json(Content) -> Json
+pub fn content_to_json(Content) -> @json.Json
 
-pub fn decode_rpc_message(Json) -> RpcMessage? raise McpError
+pub fn decode_rpc_message(@json.Json) -> RpcMessage? raise McpError
 
 pub fn expand_env(String) -> String
 
@@ -34,15 +35,15 @@ pub fn mcpbox_exit(Int32) -> Unit
 
 pub async fn open_live_session(Server, Int32, inherit_env? : Bool) -> LiveSession
 
-pub fn parse_call_result(Json) -> CallResult raise McpError
+pub fn parse_call_result(@json.Json) -> CallResult raise McpError
 
-pub fn parse_content(Json) -> Content
+pub fn parse_content(@json.Json) -> Content
 
-pub fn parse_jsonc(String) -> Json raise McpError
+pub fn parse_jsonc(String) -> @json.Json raise McpError
 
-pub fn parse_tool(Json) -> Tool raise McpError
+pub fn parse_tool(@json.Json) -> Tool raise McpError
 
-pub fn parse_tools(Json) -> Array[Tool] raise McpError
+pub fn parse_tools(@json.Json) -> Array[Tool] raise McpError
 
 pub let protocol_version : String
 
@@ -50,37 +51,37 @@ pub fn render_call_result(CallResult) -> String
 
 pub fn render_instructions(String, String) -> Array[String]
 
-pub fn render_params(Json) -> String
+pub fn render_params(@json.Json) -> String
 
 pub fn render_tool_doc(Tool, String) -> Array[String]
 
 pub fn render_tool_signature(Tool) -> String
 
-pub fn rpc_error_response(Json, Int32, String) -> Json
+pub fn rpc_error_response(@json.Json, Int32, String) -> @json.Json
 
-pub fn rpc_notification(String, Json?) -> Json
+pub fn rpc_notification(String, @json.Json?) -> @json.Json
 
-pub fn rpc_request(Int32, String, Json?) -> Json
+pub fn rpc_request(Int32, String, @json.Json?) -> @json.Json
 
-pub fn rpc_result_response(Json, Json) -> Json
+pub fn rpc_result_response(@json.Json, @json.Json) -> @json.Json
 
 pub async fn run(Array[String]) -> Unit
 
-pub fn schema_choices(Json) -> String
+pub fn schema_choices(@json.Json) -> String
 
-pub fn schema_description(Json) -> String
+pub fn schema_description(@json.Json) -> String
 
-pub fn schema_properties(Json) -> Map[String, Json]
+pub fn schema_properties(@json.Json) -> Map[String, @json.Json]
 
-pub fn schema_type(Json) -> String
+pub fn schema_type(@json.Json) -> String
 
-pub fn server_info_to_json(ServerInfo) -> Json
+pub fn server_info_to_json(ServerInfo) -> @json.Json
 
-pub fn server_to_json(Server) -> Json
+pub fn server_to_json(Server) -> @json.Json
 
-pub fn servers_from_document(Json, String, String) -> Array[Server] raise McpError
+pub fn servers_from_document(@json.Json, String, String) -> Array[Server] raise McpError
 
-pub fn tool_to_json(Tool) -> Json
+pub fn tool_to_json(Tool) -> @json.Json
 
 pub fn transport_label(Server) -> String
 
@@ -96,26 +97,29 @@ pub(all) suberror McpError {
 }
 
 // Types and methods
+#derive(@debug.Debug)
 pub(all) struct CallResult {
   content : Array[Content]
   is_error : Bool
-  structured : Json?
-} derive(@debug.Debug)
+  structured : @json.Json?
+}
 pub fn CallResult::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) enum Content {
   Text(String)
   Image(String, String)
   Audio(String, String)
-  EmbeddedResource(Json)
-  Unknown(Json)
-} derive(@debug.Debug)
+  EmbeddedResource(@json.Json)
+  Unknown(@json.Json)
+}
 pub fn Content::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) struct HttpSpec {
   url : String
   headers : Map[String, String]
-} derive(@debug.Debug)
+}
 pub fn HttpSpec::to_repr(Self) -> @debug.Repr
 
 pub struct LiveSession {
@@ -125,63 +129,70 @@ pub struct LiveSession {
 pub async fn LiveSession::close(Self) -> Unit
 pub fn LiveSession::session(Self) -> Session
 
+#derive(@debug.Debug)
 pub(all) struct RpcError {
   code : Int32
   message : String
-  data : Json?
-} derive(@debug.Debug)
+  data : @json.Json?
+}
 pub fn RpcError::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) enum RpcMessage {
-  Response(Int32, Json?, RpcError?)
-  ServerRequest(Json, String, Json?)
-  Notification(String, Json?)
-} derive(@debug.Debug)
+  Response(Int32, @json.Json?, RpcError?)
+  ServerRequest(@json.Json, String, @json.Json?)
+  Notification(String, @json.Json?)
+}
 pub fn RpcMessage::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) struct Server {
   name : String
   kind : ServerKind
   note : String
-} derive(@debug.Debug)
+}
 pub fn Server::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) struct ServerInfo {
   name : String
   version : String
   protocol_version : String
   instructions : String
-} derive(@debug.Debug)
+}
 pub fn ServerInfo::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) enum ServerKind {
   Stdio(StdioSpec)
   Http(HttpSpec)
-} derive(@debug.Debug)
+}
 pub fn ServerKind::to_repr(Self) -> @debug.Repr
 
 pub struct Session {
   // private fields
 }
-pub async fn Session::call_tool(Self, String, Json, Int32) -> CallResult
+pub async fn Session::call_tool(Self, String, @json.Json, Int32) -> CallResult
 pub async fn Session::list_tools(Self, Int32) -> Array[Tool]
 pub fn Session::name(Self) -> String
 pub fn Session::server_info(Self) -> ServerInfo
 
+#derive(@debug.Debug)
 pub(all) struct StdioSpec {
   command : String
   args : Array[String]
   env : Map[String, String]
   cwd : String
-} derive(@debug.Debug)
+}
 pub fn StdioSpec::to_repr(Self) -> @debug.Repr
 
+#derive(@debug.Debug)
 pub(all) struct Tool {
   name : String
   title : String
   description : String
-  input_schema : Json
-} derive(@debug.Debug)
+  input_schema : @json.Json
+}
 pub fn Tool::to_repr(Self) -> @debug.Repr
 
 // Type aliases

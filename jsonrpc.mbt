@@ -1,13 +1,15 @@
 ///|
 /// A JSON-RPC 2.0 error object.
+#derive(Debug)
 pub(all) struct RpcError {
   code : Int32
   message : String
   data : Json?
-} derive(Debug)
+}
 
 ///|
 /// One decoded JSON-RPC message from a server.
+#derive(Debug)
 pub(all) enum RpcMessage {
   /// The response to a request mcpbox sent.
   Response(Int32, Json?, RpcError?)
@@ -17,7 +19,7 @@ pub(all) enum RpcMessage {
   ServerRequest(Json, String, Json?)
   /// A server notification, such as a log line or `tools/list_changed`.
   Notification(String, Json?)
-} derive(Debug)
+}
 
 ///|
 /// Build a JSON-RPC 2.0 request object. The `repr` keeps ids integral in the
