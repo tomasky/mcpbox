@@ -15,22 +15,28 @@ priv struct DaemonEntry {
 }
 
 ///|
-/// Write to standard error without ever taking the process down.
+/// Serialises stderr so two coroutines never drive the fd at once.
 ///
 /// The async runtime performs writes to a non-pollable fd (a regular file, a
-/// pipe from `subprocess`, a CI log) on a worker thread. Two coroutines writing
-/// at once race on the shared file offset, and the runtime answers that with an
-/// uncatchable panic — the whole CLI aborts. Progress lines are genuinely
-/// concurrent (`--all` connects to every server at once, the spinner redraws
-/// while they do), so every stderr write goes through here, one at a time.
+/// pipe from `subprocess`, a CI log) on a worker thread, and rejects a second
+/// concurrent write to the same handle with an uncatchable panic — the whole
+/// CLI aborts. Progress lines are genuinely concurrent (`--all` connects to
+/// every server at once, the spinner redraws while they do), so each write
+/// takes this lock.
+let stderr_lock : @async.Mutex = @async.Mutex::Mutex()
+
+///|
+/// Write to standard error without ever taking the process down.
+///
+/// The write itself stays inline rather than being handed to a spawned task:
+/// a scheduled write can lose the race with process exit, which silently
+/// dropped the "connecting to ..." progress line.
 async fn write_stderr(text : String) -> Unit {
-  @async.with_task_group(group => {
-    group.spawn_bg(no_wait=true, () => {
-      @stdio.stderr.write(text) catch {
-        _ => ()
-      }
-    })
-  })
+  stderr_lock.acquire()
+  defer stderr_lock.release()
+  @stdio.stderr.write(text) catch {
+    _ => ()
+  }
 }
 
 ///|
