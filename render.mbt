@@ -3,11 +3,52 @@
 /// schema-aware coercion that makes `key=value` arguments pleasant to write.
 
 ///|
-/// Parse an integer, or `None` when the text is not one.
-fn try_int(raw : String) -> Int32? {
-  Some(@string.parse_int(raw.trim())) catch {
-    _ => None
+/// The genuine integer spelling of `text`, or `None`.
+///
+/// JSON numbers are not bounded by `Int32` and neither are MCP schemas: a
+/// millisecond timestamp or a 64-bit id is routinely typed `integer`. Parsing
+/// through `Int32` would turn every such value into a JSON *string*, silently
+/// breaking the tool call. So a value is accepted when it is plain digits (with
+/// an optional sign) and exactly representable as a `Double`; the original
+/// text is returned as the `repr` so JSON keeps the full precision instead of
+/// printing `1e18` or a rounded mantissa.
+fn try_int_literal(raw : String) -> String? {
+  let text = raw.trim()
+  let chars = text.to_array()
+  let start = if chars.length() > 0 && (chars[0] == '-' || chars[0] == '+') {
+    1
+  } else {
+    0
   }
+  // Reject `1.5`, `1e9`, `nan`, and an empty (or sign-only) string: those are
+  // not integers, and `number` is the type that accepts them.
+  if start >= chars.length() {
+    return None
+  }
+  for i in start..<chars.length() {
+    if !(chars[i] >= '0' && chars[i] <= '9') {
+      return None
+    }
+  }
+  let value : Double = @string.parse_double(text) catch { _ => return None }
+  if value.is_nan() || value.is_inf() {
+    return None
+  }
+  // A `Double` holds every integer up to 2^53 exactly; past that the binary
+  // value no longer matches what was typed, and `repr` would encode a number
+  // the caller never asked for. Comparing `Double`s cannot detect this
+  // (2^53+1 and 2^53 compare equal), so the text goes through `Int64` first,
+  // whose accepted range is checked directly.
+  let exact : Int64 = @string.parse_int64(text) catch { _ => return None }
+  if exact > 9007199254740992L || exact < -9007199254740992L {
+    return None
+  }
+  let normalized : String = if text.has_prefix("+") {
+    text[1:].to_owned()
+  } else {
+    text.to_owned()
+  }
+  Some(normalized)
 }
 
 ///|
@@ -37,9 +78,13 @@ pub fn coerce_value(raw : String, schema : Json?) -> Json {
     Some(definition) =>
       match schema_type(definition) {
         "integer" =>
-          match try_int(raw) {
-            Some(value) =>
-              Json::number(value.to_double(), repr=value.to_string())
+          match try_int_literal(raw) {
+            Some(value) => {
+              let number : Double = @string.parse_double(value) catch {
+                _ => 0.0
+              }
+              Json::number(number, repr=value)
+            }
             None => Json::string(raw)
           }
         "number" =>

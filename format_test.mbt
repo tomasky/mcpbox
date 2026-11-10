@@ -61,3 +61,63 @@ test "tool_to_json round-trips the important fields" {
     _ => abort("expected an object")
   }
 }
+
+///|
+/// `count=5` must become the JSON number `5`, not the string `"5"`.
+test "coerce_value turns a small integer into a JSON number" {
+  let schema = @json.parse("{\"type\":\"integer\"}")
+  assert_eq(@mcpbox.coerce_value("5", Some(schema)).stringify(), "5")
+  assert_eq(@mcpbox.coerce_value(" -5 ", Some(schema)).stringify(), "-5")
+  assert_eq(@mcpbox.coerce_value("+7", Some(schema)).stringify(), "7")
+}
+
+///|
+/// MCP schemas call 64-bit ids and millisecond timestamps `integer`, so an
+/// `Int32`-only parse would silently demote them to JSON strings.
+test "coerce_value keeps integers beyond Int32 as JSON numbers" {
+  let schema = @json.parse("{\"type\":\"integer\"}")
+  assert_eq(
+    @mcpbox.coerce_value("2147483648", Some(schema)).stringify(),
+    "2147483648",
+  )
+  assert_eq(
+    @mcpbox.coerce_value("1712345678901", Some(schema)).stringify(),
+    "1712345678901",
+  )
+  assert_eq(
+    @mcpbox.coerce_value("9007199254740992", Some(schema)).stringify(),
+    "9007199254740992",
+  )
+}
+
+///|
+/// Anything that is not a plain integer stays a string rather than being
+/// rounded or rejected, so a caller sees their own input echoed back.
+test "coerce_value leaves non-integers for an integer schema as strings" {
+  let schema = @json.parse("{\"type\":\"integer\"}")
+  for raw in ["1.5", "1e9", "abc", "", "9007199254740993", "Infinity"] {
+    assert_eq(
+      @mcpbox.coerce_value(raw, Some(schema)).stringify(),
+      "\"" + raw + "\"",
+    )
+  }
+}
+
+///|
+test "coerce_value keeps Infinity and NaN out of JSON numbers" {
+  let schema = @json.parse("{\"type\":\"number\"}")
+  assert_eq(@mcpbox.coerce_value("1.5", Some(schema)).stringify(), "1.5")
+  assert_eq(
+    @mcpbox.coerce_value("Infinity", Some(schema)).stringify(),
+    "\"Infinity\"",
+  )
+  assert_eq(@mcpbox.coerce_value("NaN", Some(schema)).stringify(), "\"NaN\"")
+}
+
+///|
+test "coerce_value splits arrays and coerces their items" {
+  let schema = @json.parse(
+    "{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}",
+  )
+  assert_eq(@mcpbox.coerce_value("1, 2,3", Some(schema)).stringify(), "[1,2,3]")
+}

@@ -358,8 +358,8 @@ async fn fetch_server(
 /// `mcpbox list [server ...] [--all]`
 ///
 /// Without `--all`, no server is started: the default path only prints the
-/// configured names so discovery stays instant. `--all` opts into connecting
-/// to every server and showing its tools.
+/// configured names so discovery stays instant, unless `-b` was given. `--all`
+/// opts into connecting to every server and showing its tools.
 async fn cmd_list(args : Array[String]) -> Unit raise Error {
   let opts = parse_options(args)
   if opts.help {
@@ -372,6 +372,12 @@ async fn cmd_list(args : Array[String]) -> Unit raise Error {
   let has_adhoc = adhoc_server(opts) is Some(_)
   let servers = resolve_servers(opts)
   if !opts.all_servers && !has_adhoc && opts.positional.length() == 0 {
+    // `-b` asks for the keep-alive service even when this command only prints
+    // names: warming the servers up before the first call is the whole point
+    // of the flag, and the help text promises it does that here too.
+    if opts.background {
+      ignore(daemon_for_command(opts))
+    }
     if servers.length() == 0 {
       if opts.json {
         print_line(Json::object({ "servers": Json::array([]) }).stringify())
