@@ -189,7 +189,15 @@ async fn running_daemon() -> DaemonLocator? {
 /// `-b` starts the service when necessary. Ordinary commands reuse an existing
 /// service, but remain one-shot if none is running. Calls are never retried:
 /// a lost reply might mean a side-effecting tool already ran.
+///
+/// An ad-hoc server (`--http-url` / `--stdio`) never uses the service. It is
+/// defined by this command line, not by a config file the daemon could share,
+/// and a long-lived session keyed on the name `adhoc` would keep a process
+/// alive that no config describes.
 async fn daemon_for_command(opts : Options) -> DaemonLocator? raise Error {
+  if adhoc_server(opts) is Some(_) {
+    return None
+  }
   let existing = running_daemon()
   if existing is Some(_) || !opts.background {
     return existing

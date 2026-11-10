@@ -294,8 +294,17 @@ fn is_json_space(c : Char) -> Bool {
 
 ///|
 /// Parse JSONC text into a `Json` value.
+///
+/// A leading UTF-8 byte-order mark is dropped first. Editors on Windows add
+/// one by default, and the JSON parser rejects it as an unexpected character,
+/// which would make an otherwise valid config look broken.
 pub fn parse_jsonc(text : String) -> Json raise McpError {
-  let cleaned = strip_trailing_commas(strip_jsonc_comments(text))
+  let body = if text.has_prefix("\u{feff}") {
+    text[1:].to_owned()
+  } else {
+    text
+  }
+  let cleaned = strip_trailing_commas(strip_jsonc_comments(body))
   @json.parse(cleaned) catch {
     e => raise fail("invalid JSON: \{e.to_string()}")
   }

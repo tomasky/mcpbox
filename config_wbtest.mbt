@@ -33,6 +33,14 @@ test "parse_jsonc accepts comments and trailing commas" {
 }
 
 ///|
+/// Editors on Windows write a UTF-8 BOM by default; it must not look like a
+/// syntax error in an otherwise valid config.
+test "parse_jsonc accepts a leading byte-order mark" {
+  let json = parse_jsonc("\u{feff}{\"a\":1}")
+  assert_eq(json.stringify(), "{\"a\":1}")
+}
+
+///|
 test "parse_jsonc rejects broken JSON" {
   let failed = try {
     ignore(parse_jsonc("{\"a\":"))
