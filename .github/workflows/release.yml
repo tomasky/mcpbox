@@ -23,6 +23,8 @@ jobs:
   build:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -87,8 +89,14 @@ jobs:
           set -eu
           asset="mcpbox-${{ matrix.target }}"
           file "dist/$asset" || true
-          (cd dist && shasum -a 256 "$asset" > "$asset.sha256" 2>/dev/null \
-            || sha256sum "$asset" > "$asset.sha256")
+          # `shasum` exists on macOS and most Linux images; `sha256sum` is the
+          # coreutils fallback. Check for the command rather than chaining with
+          # `||`, which would also run the fallback when `shasum` merely failed.
+          if command -v shasum >/dev/null 2>&1; then
+            (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
+          else
+            (cd dist && sha256sum "$asset" > "$asset.sha256")
+          fi
           ls -l dist
 
       - name: Smoke test
@@ -97,33 +105,12 @@ jobs:
           "./dist/mcpbox-${{ matrix.target }}" version
           "./dist/mcpbox-${{ matrix.target }}" help >/dev/null
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mcpbox-${{ matrix.target }}
-          path: |
-            dist/mcpbox-${{ matrix.target }}
-            dist/mcpbox-${{ matrix.target }}.sha256
-          if-no-files-found: error
-
-  release:
-    name: publish GitHub release
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: List assets
-        run: ls -l dist
-
+      # Each target uploads its own assets to the one release for this tag.
+      # Shipping the files straight from the runner that built them avoids
+      # staging them as workflow artifacts and downloading them again in a
+      # separate job; `action-gh-release` creates the release on first use and
+      # appends to it afterwards, so the matrix fills the same release in
+      # parallel.
       - name: Resolve tag
         id: tag
         run: |
@@ -143,14 +130,16 @@ jobs:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
-          files: dist/*
+          files: |
+            dist/mcpbox-${{ matrix.target }}
+            dist/mcpbox-${{ matrix.target }}.sha256
 
   # The npm package is a launcher, not a bundle: it downloads the matching
   # release asset on first run. Publishing after the release job guarantees the
   # asset exists before the first user pulls it.
   npm:
     name: publish @tomasko/mcpbox
-    needs: release
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -163,11 +152,21 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      # Same resolution the build jobs use, so a tag pushed as `v0.1.8` and a
+      # `workflow_dispatch` with no tag both agree on the version being shipped.
       - name: Check the package version matches the release
         working-directory: npmjs
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -eu
-          WANT="${{ needs.release.outputs.tag }}"
+          if [ -n "${INPUT_TAG:-}" ]; then
+            WANT="$INPUT_TAG"
+          elif [ -n "${GITHUB_REF_NAME:-}" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            WANT="$GITHUB_REF_NAME"
+          else
+            WANT="v$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' ../moon.mod)"
+          fi
           WANT="${WANT#v}"
           HAVE="$(node -p "require('./package.json').version")"
           if [ "$WANT" != "$HAVE" ]; then
