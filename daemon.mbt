@@ -15,11 +15,28 @@ priv struct DaemonEntry {
 }
 
 ///|
+/// Write to standard error without ever taking the process down.
+///
+/// The async runtime performs writes to a non-pollable fd (a regular file, a
+/// pipe from `subprocess`, a CI log) on a worker thread. Two coroutines writing
+/// at once race on the shared file offset, and the runtime answers that with an
+/// uncatchable panic — the whole CLI aborts. Progress lines are genuinely
+/// concurrent (`--all` connects to every server at once, the spinner redraws
+/// while they do), so every stderr write goes through here, one at a time.
+async fn write_stderr(text : String) -> Unit {
+  @async.with_task_group(group => {
+    group.spawn_bg(no_wait=true, () => {
+      @stdio.stderr.write(text) catch {
+        _ => ()
+      }
+    })
+  })
+}
+
+///|
 async fn startup_progress(opts : Options, message : String) -> Unit {
   if !opts.quiet && !opts.json {
-    @stdio.stderr.write("mcpbox: " + message + "\n") catch {
-      _ => ()
-    }
+    write_stderr("mcpbox: " + message + "\n")
   }
 }
 
@@ -62,9 +79,7 @@ async fn spinner_loop(label : String) -> Unit {
   let mut frame = 0
   let mut elapsed_ms = 300
   while true {
-    @stdio.stderr.write(progress_line(label, frame, elapsed_ms)) catch {
-      _ => ()
-    }
+    write_stderr(progress_line(label, frame, elapsed_ms))
     @async.sleep(100)
     frame += 1
     elapsed_ms += 100
@@ -73,9 +88,7 @@ async fn spinner_loop(label : String) -> Unit {
 
 ///|
 async fn clear_progress_line() -> Unit {
-  @stdio.stderr.write("\r\u{001b}[2K") catch {
-    _ => ()
-  }
+  write_stderr("\r\u{001b}[2K")
 }
 
 ///|
