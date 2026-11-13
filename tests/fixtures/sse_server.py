@@ -15,7 +15,9 @@ be checked without a real MCP implementation.
 `GET /sse?flaky=1` drops the stream once on `initialize` and once on
 `tools/list`, replaying each stashed response on the next stream. That makes
 the client reconnect mid-session, refresh the endpoint, and send
-`Last-Event-ID`.
+`Last-Event-ID`. `GET /sse?expire=1` forgets the session when the first
+`tools/list` arrives and answers it with 404, so a client must reopen the
+stream and resend the request.
 """
 
 import json
@@ -32,6 +34,7 @@ SESSION_SEQ = 0
 # Responses whose stream was dropped, replayed on the next flaky stream.
 PENDING = []
 DROPPED = set()
+EXPIRED = False
 
 
 def record(line):
@@ -94,7 +97,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         query = self.path.split("?", 1)[1] if "?" in self.path else ""
-        flaky = parse_qs(query).get("flaky", [""])[0] == "1"
+        params = parse_qs(query)
+        flaky = params.get("flaky", [""])[0] == "1"
+        expire = params.get("expire", [""])[0] == "1"
 
         self.close_connection = True
         self.send_response(200)
@@ -107,7 +112,12 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             SESSION_SEQ += 1
             session_id = f"session-{SESSION_SEQ}"
-            SESSIONS[session_id] = {"events": events, "flaky": flaky}
+            SESSIONS[session_id] = {
+                "events": events,
+                "flaky": flaky,
+                "expire": expire,
+                "initialized": False,
+            }
         if flaky:
             last_id = self.headers.get("Last-Event-ID", "")
             record("stream:" + (last_id if last_id else "-"))
@@ -177,17 +187,45 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400, "invalid json")
             return
 
+        if session["expire"] and message.get("method") == "tools/list":
+            global EXPIRED
+            with LOCK:
+                forget = not EXPIRED
+                if forget:
+                    EXPIRED = True
+                    SESSIONS.pop(session_id, None)
+            if forget:
+                record("expired")
+                self.send_error(404, "unknown session")
+                return
+
         self.send_response(202)
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-        if message.get("method") == "notifications/initialized":
+        method = message.get("method")
+        if method == "initialize":
+            session["initialized"] = True
+        if method == "notifications/initialized":
             return
         if message.get("id") == "srv-1" and "error" in message:
             record("srv-1")
             return
         if message.get("id") is not None:
-            method = message.get("method")
+            # `?expire=1` also models a server that refuses work on a session
+            # that has not been initialized, so the client must handshake
+            # again after reconnecting, not just resend the request.
+            if session["expire"] and not session["initialized"]:
+                record("uninitialized:" + str(method))
+                events.put(json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {
+                        "code": -32002,
+                        "message": "server not initialized",
+                    },
+                }))
+                return
             response = json.dumps(mcp_response(message))
             drop = False
             if session["flaky"] and method in ("initialize", "tools/list"):

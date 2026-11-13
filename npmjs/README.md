@@ -104,6 +104,9 @@ The legacy HTTP+SSE transport is selected with `"type": "sse"` in the config
 `endpoint` event, and POSTs messages there; responses are read from the same
 stream. A dropped stream is reopened, and the replayed `Last-Event-ID` lets a
 server resume where the client stopped; the pending request is never re-sent.
+If a `POST` answers 404 the server has forgotten the session, so mcpbox reopens
+the stream, handshakes again, and re-sends that request once (a 404 means it was
+not accepted, so it cannot run twice).
 
 ### Inspecting configuration
 

@@ -489,7 +489,34 @@ async fn Session::request(
       outcome.unwrap()
     }
     Http(link) => http_request(link, message, id, self.name, timeout_ms)
-    Sse(link) => sse_request(link, message, id, self.name, timeout_ms)
+    Sse(link) => {
+      let (code, body) = sse_post_once(link, message, self.name, timeout_ms)
+      if code == 404 {
+        // The server forgot this stream's session (a restart, or a proxy
+        // dropping state), and a 404 means the request was not accepted.
+        // Reopen the stream, handshake again on the new session, and send the
+        // request once more. A second 404 means the endpoint itself is wrong,
+        // so report it instead of looping.
+        sse_reconnect(link, self.name, timeout_ms)
+        if rpc_method != "initialize" {
+          self.initialize(timeout_ms)
+        }
+        let (retry_code, retry_body) = sse_post_once(
+          link,
+          message,
+          self.name,
+          timeout_ms,
+        )
+        if retry_code >= 300 {
+          raise fail(
+            "\{self.name} rejected a message with HTTP \{retry_code} even after reconnecting: \{retry_body}",
+          )
+        }
+      } else if code >= 300 {
+        raise fail("\{self.name} rejected a message with HTTP \{code}: \{body}")
+      }
+      sse_await_response(link, id, self.name, timeout_ms)
+    }
   }
 }
 
@@ -1454,19 +1481,19 @@ fn resolve_sse_endpoint(
 }
 
 ///|
-/// POST one JSON-RPC message to the endpoint named by the SSE stream.
-async fn sse_post(
+/// POST one JSON-RPC message and return the response status and body.
+async fn sse_post_once(
   link : SseLink,
   message : Json,
   name : String,
   timeout_ms : Int32,
-) -> Unit raise Error {
+) -> (Int32, String) raise Error {
   let post : HttpLink = {
     url: link.endpoint,
     headers: link.headers,
     session_id: None,
   }
-  let (code, body) = http_exchange(
+  http_exchange(
     post,
     @http.Post,
     link.endpoint,
@@ -1474,23 +1501,20 @@ async fn sse_post(
     name,
     timeout_ms,
   )
-  if code >= 300 {
-    raise fail("'\{name}' rejected a message with HTTP \{code}: \{body}")
-  }
 }
 
 ///|
-/// Send a request over the SSE transport: POST it, then read the event stream
-/// until its response arrives.
-async fn sse_request(
+/// POST one JSON-RPC message to the endpoint named by the SSE stream.
+async fn sse_post(
   link : SseLink,
   message : Json,
-  id : Int32,
   name : String,
   timeout_ms : Int32,
-) -> Json raise Error {
-  sse_post(link, message, name, timeout_ms)
-  sse_await_response(link, id, name, timeout_ms)
+) -> Unit raise Error {
+  let (code, body) = sse_post_once(link, message, name, timeout_ms)
+  if code >= 300 {
+    raise fail("'\{name}' rejected a message with HTTP \{code}: \{body}")
+  }
 }
 
 ///|

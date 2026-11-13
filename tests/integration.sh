@@ -139,6 +139,30 @@ if [ "$(grep -c '^stream:' "$SSE_MARKER")" -ne 3 ] ||
   exit 1
 fi
 
+# `?expire=1` forgets the session on the first tools/list and answers 404. The
+# request was not accepted, so mcpbox reopens the stream and sends it once more.
+cat >"$SSE_CONFIG" <<JSON
+{
+  "mcpServers": {
+    "expired": {"type": "sse", "url": "http://127.0.0.1:$SSE_PORT/sse?expire=1"}
+  }
+}
+JSON
+MCPBOX_CONFIG="$SSE_CONFIG" "$BIN" list expired --json |
+  grep -q '"name": "echo"'
+grep -qx "expired" "$SSE_MARKER" || {
+  echo "error: SSE 404 did not trigger a reconnect" >&2
+  cat "$SSE_MARKER" >&2
+  cat "$SSE_LOG" >&2
+  exit 1
+}
+if grep -q '^uninitialized:' "$SSE_MARKER"; then
+  echo "error: SSE 404 recovery reused the session without initializing" >&2
+  cat "$SSE_MARKER" >&2
+  cat "$SSE_LOG" >&2
+  exit 1
+fi
+
 echo
 echo "== config filters =="
 FILTERED="$(MCPBOX_CONFIG=" $CONFIG " "$BIN" config --json 'al*')"

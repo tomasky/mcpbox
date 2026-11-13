@@ -171,8 +171,11 @@ A minimal `mcpbox.json`:
 A legacy HTTP+SSE server uses `"type": "sse"` and its `/sse` URL; mcpbox opens
 the event stream and POSTs messages to the endpoint it announces. If the stream
 drops while a response is pending, mcpbox reopens it (bounded), refreshes the
-endpoint, and sends `Last-Event-ID`, without re-sending the request. Streamable
-HTTP servers use `"url"` (with or without `"type": "http"`).
+endpoint, and sends `Last-Event-ID`, without re-sending the request. If the
+server forgets the session and answers a `POST` with 404, the request was not
+accepted: mcpbox reopens the stream, runs the `initialize` handshake on the new
+session, and sends the request once more. Streamable HTTP servers use `"url"`
+(with or without `"type": "http"`).
 
 Files are read in precedence order, with the first definition of a name winning.
 `MCPBOX_CONFIG` is trimmed and a leading `~` is expanded, so a quoted
