@@ -33,7 +33,14 @@ jobs:
           # run on any distribution regardless of its glibc version. A glibc
           # build would bake in the runner's symbol versions and refuse to
           # start on older systems ("GLIBC_2.38 not found").
-          - runner: ubuntu-latest
+          #
+          # The x86_64 build is pinned to Ubuntu 24.04 rather than
+          # `ubuntu-latest`: newer Ubuntu images raise the compiler's default
+          # target to x86-64-v3 (AVX2/BMI2), and their static musl libc.a is
+          # built the same way. That produces a binary that dies with SIGILL
+          # ("Illegal instruction") on pre-Haswell CPUs, so 24.04 keeps both
+          # the project code and libc.a at the x86-64 baseline.
+          - runner: ubuntu-24.04
             target: linux-x86_64
             musl: true
           # GitHub's arm64 Linux runners are only available to public
@@ -152,7 +159,7 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      # Same resolution the build jobs use, so a tag pushed as `v0.1.8` and a
+      # Same resolution the build jobs use, so a tag pushed as `v0.1.9` and a
       # `workflow_dispatch` with no tag both agree on the version being shipped.
       - name: Check the package version matches the release
         working-directory: npmjs

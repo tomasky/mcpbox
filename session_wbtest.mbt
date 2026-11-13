@@ -80,6 +80,21 @@ test "resolve_redirect_url handles absolute, root and relative locations" {
 }
 
 ///|
+test "next_tools_cursor reads only a non-empty string cursor" {
+  assert_eq(
+    next_tools_cursor(parse_jsonc("{\"tools\":[],\"nextCursor\":\"p2\"}")),
+    Some("p2"),
+  )
+  assert_eq(
+    next_tools_cursor(parse_jsonc("{\"tools\":[],\"nextCursor\":\"\"}")),
+    None,
+  )
+  assert_eq(next_tools_cursor(parse_jsonc("{\"tools\":[]}")), None)
+  assert_eq(next_tools_cursor(parse_jsonc("{\"nextCursor\":7}")), None)
+  assert_eq(next_tools_cursor(Json::array([])), None)
+}
+
+///|
 test "parse_tools reads names and schemas" {
   let tools = parse_tools(
     parse_jsonc(

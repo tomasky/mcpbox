@@ -462,49 +462,57 @@ async fn daemon_execute(
       live
     }
   }
-  let outcome : Result[(Json, Bool), Error] = try {
-    let session = live.session()
-    let tools = session.list_tools(timeout)
-    if operation == "list" {
-      // parse_server_info expects the MCP initialize shape.
-      let info = session.server_info()
-      let response = Json::object({
-        "serverInfo": Json::object({
-          "name": Json::string(info.name),
-          "version": Json::string(info.version),
-        }),
-        "protocolVersion": Json::string(info.protocol_version),
-        "instructions": Json::string(info.instructions),
-        "tools": Json::array(tools.map(tool_to_json)),
-      })
-      Ok((response, false))
-    } else {
-      let name = daemon_string(request, "tool")
-      let tool = match find_tool(tools, name) {
-        Some(tool) => tool
-        None =>
-          raise fail(
-            "'\{server.name}' has no tool named '\{name}'" +
-            available_tools(tools),
-          )
-      }
-      let pairs = daemon_strings(daemon_field(request, "pairs"))
-      let arguments = build_arguments(pairs, tool.input_schema)
-      Ok(
-        (
-          call_result_to_json(session.call_tool(name, arguments, timeout)),
-          false,
-        ),
-      )
-    }
-  } catch {
+  let session = live.session()
+  // Only a transport failure invalidates the warm session. A missing tool name
+  // or a malformed argument is a caller mistake, and dropping the child would
+  // make the next command pay the startup cost again for no reason.
+  let tools_result : Result[Array[Tool], Error] = Ok(
+    session.list_tools(timeout),
+  ) catch {
     error => Err(error)
   }
-  match outcome {
-    Ok(result) => result
+  let tools = match tools_result {
+    Ok(tools) => tools
     Err(error) => {
       // After a timeout or malformed reply the MCP stream may be out of sync.
       // Drop it, but never retry the operation automatically.
+      sessions.remove(key)
+      live.close()
+      raise error
+    }
+  }
+  if operation == "list" {
+    // parse_server_info expects the MCP initialize shape.
+    let info = session.server_info()
+    let response = Json::object({
+      "serverInfo": Json::object({
+        "name": Json::string(info.name),
+        "version": Json::string(info.version),
+      }),
+      "protocolVersion": Json::string(info.protocol_version),
+      "instructions": Json::string(info.instructions),
+      "tools": Json::array(tools.map(tool_to_json)),
+    })
+    return (response, false)
+  }
+  let name = daemon_string(request, "tool")
+  let tool = match find_tool(tools, name) {
+    Some(tool) => tool
+    None =>
+      raise fail(
+        "'\{server.name}' has no tool named '\{name}'" + available_tools(tools),
+      )
+  }
+  let pairs = daemon_strings(daemon_field(request, "pairs"))
+  let arguments = build_arguments(pairs, tool.input_schema)
+  let call_result : Result[Json, Error] = Ok(
+    call_result_to_json(session.call_tool(name, arguments, timeout)),
+  ) catch {
+    error => Err(error)
+  }
+  match call_result {
+    Ok(result) => (result, false)
+    Err(error) => {
       sessions.remove(key)
       live.close()
       raise error

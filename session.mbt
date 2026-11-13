@@ -156,9 +156,21 @@ async fn with_http_session(
 ) -> Unit raise Error {
   let link = { url: spec.url, headers: spec.headers, session_id: None, }
   let session = Session::connect(name, Link::Http(link))
-  session.initialize(timeout_ms)
-  f(session)
+  // A failed callback must still send the session-termination DELETE: there
+  // is no task group here to reap the remote session the way it reaps a stdio
+  // child, and leaking it would leave the server holding state per failed call.
+  let outcome : Result[Unit, Error] = try {
+    session.initialize(timeout_ms)
+    f(session)
+    Ok(())
+  } catch {
+    error => Err(error)
+  }
   session.close()
+  match outcome {
+    Ok(_) => ()
+    Err(error) => raise error
+  }
 }
 
 ///|
@@ -427,32 +439,70 @@ async fn Session::notify(
   let message = rpc_notification(rpc_method, params)
   match self.link {
     Stdio(link) => write_line(link, message, self.name, timeout_ms)
-    Http(link) =>
-      ignore(
-        http_exchange(
-          link,
-          @http.Post,
-          link.url,
-          message.stringify(),
-          self.name,
-          timeout_ms,
-        ),
+    Http(link) => {
+      let (code, body) = http_exchange(
+        link,
+        @http.Post,
+        link.url,
+        message.stringify(),
+        self.name,
+        timeout_ms,
       )
+      // A server that rejects `notifications/initialized` will refuse every
+      // later request; reporting the status here says why.
+      if code >= 400 {
+        raise fail(
+          "\{self.name} rejected \{rpc_method} with HTTP \{code}: \{body}",
+        )
+      }
+    }
   }
 }
 
 ///|
-/// List the server's tools.
+/// The cursor of a `tools/list` page, when the server paginates.
+fn next_tools_cursor(result : Json) -> String? {
+  guard result is Object(obj) else { return None }
+  match obj.get("nextCursor") {
+    Some(String(cursor)) if cursor.length() > 0 => Some(cursor)
+    _ => None
+  }
+}
+
+///|
+/// List the server's tools, following `nextCursor` until the last page. A
+/// server with more tools than fit in one response otherwise appears to be
+/// missing everything after page one, and `call` reports a tool it does
+/// advertise as unknown.
 pub async fn Session::list_tools(
   self : Session,
   timeout_ms : Int32,
 ) -> Array[Tool] raise Error {
-  let result = self.request(
-    "tools/list",
-    Some(Json::object(Map([]))),
-    timeout_ms,
-  )
-  parse_tools(result)
+  let out : Array[Tool] = []
+  let seen : Map[String, Unit] = Map([])
+  let mut cursor : String? = None
+  while true {
+    let params = match cursor {
+      None => Json::object(Map([]))
+      Some(cursor) => Json::object({ "cursor": Json::string(cursor) })
+    }
+    let result = self.request("tools/list", Some(params), timeout_ms)
+    for tool in parse_tools(result) {
+      out.push(tool)
+    }
+    // A server that repeats a cursor would otherwise page forever.
+    match next_tools_cursor(result) {
+      None => break
+      Some(next) =>
+        if seen.contains(next) {
+          break
+        } else {
+          seen[next] = ()
+          cursor = Some(next)
+        }
+    }
+  }
+  out
 }
 
 ///|
@@ -602,7 +652,7 @@ async fn write_line(
     () => link.stdin.write(line),
     error=fail("timed out after \{timeout_ms}ms writing to '\{name}'"),
   ) catch {
-    e => raise fail("cannot write to '\{name}': \{e.to_string()}")
+    e => raise fail("cannot write to '\{name}': \{error_text(e)}")
   }
 }
 
@@ -620,7 +670,7 @@ async fn read_message(
       () => link.stdout.read_until("\n"),
       error=fail("timed out after \{timeout_ms}ms waiting for '\{name}'"),
     ) catch {
-      e => raise fail("cannot read from '\{name}': \{e.to_string()}")
+      e => raise fail("cannot read from '\{name}': \{error_text(e)}")
     }
     match line {
       None =>
@@ -865,14 +915,14 @@ async fn http_send_once(
     },
     error=fail("timed out after \{timeout_ms}ms calling '\{name}'"),
   ) catch {
-    e => raise fail("cannot reach '\{name}': \{e.to_string()}")
+    e => raise fail("cannot reach '\{name}': \{error_text(e)}")
   }
   match response.headers.get(@http.CaseInsensitiveString("mcp-session-id")) {
     Some(session_id) => link.session_id = Some(session_id)
     None => ()
   }
   let text = data.text() catch {
-    e => raise fail("cannot read the response from '\{name}': \{e.to_string()}")
+    e => raise fail("cannot read the response from '\{name}': \{error_text(e)}")
   }
   (response, text)
 }

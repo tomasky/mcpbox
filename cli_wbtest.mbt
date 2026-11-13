@@ -11,3 +11,17 @@ test "adhoc_server rejects an HTTP URL without a scheme" {
   let good = parse_options(["--http-url", "https://h/mcp"])
   assert_true(adhoc_server(good) is Some(_))
 }
+
+///|
+test "adhoc_server rejects combining --http-url with --stdio" {
+  let opts = parse_options([
+    "--http-url", "https://h/mcp", "--stdio", "python3 server.py",
+  ])
+  let failed = try {
+    ignore(adhoc_server(opts))
+    false
+  } catch {
+    _ => true
+  }
+  assert_true(failed)
+}

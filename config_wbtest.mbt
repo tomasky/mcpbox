@@ -130,6 +130,27 @@ test "parse_server reports a missing HTTP url" {
 }
 
 ///|
+/// A legacy HTTP+SSE definition is not silently treated as Streamable HTTP:
+/// the error names the server and says which URL to use instead.
+test "parse_server rejects the legacy sse transport with an actionable error" {
+  let message = try {
+    ignore(
+      parse_server(
+        "x",
+        parse_jsonc("{\"type\":\"sse\",\"url\":\"https://h/sse\"}"),
+        "mcp.json",
+      ),
+    )
+    "no error"
+  } catch {
+    McpError(text) => text
+  }
+  assert_true(message.contains("legacy HTTP+SSE"))
+  assert_true(message.contains("mcp.json"))
+  assert_true(message.contains("Streamable HTTP"))
+}
+
+///|
 test "parse_server infers HTTP from a url" {
   let server = parse_server(
     "x",

@@ -43,12 +43,10 @@ fn try_int_literal(raw : String) -> String? {
   if exact > 9007199254740992L || exact < -9007199254740992L {
     return None
   }
-  let normalized : String = if text.has_prefix("+") {
-    text[1:].to_owned()
-  } else {
-    text.to_owned()
-  }
-  Some(normalized)
+  // Re-spell the number canonically. The original text may carry a leading
+  // `+` or leading zeros (`+007`), and JSON forbids both; echoing the raw
+  // spelling produced a body no strict parser would accept.
+  Some(exact.to_string())
 }
 
 ///|

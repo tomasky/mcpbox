@@ -425,12 +425,21 @@ fn parse_server(
         _ => None
       }
   }
+  // The pre-2025 HTTP+SSE transport (GET a stream, POST to an endpoint event)
+  // is a different protocol from Streamable HTTP. Treating an `sse` server as
+  // Streamable HTTP only produced a confusing 405/404 at connect time, so say
+  // what is wrong and what to change instead.
+  if kind is Some(transport) && transport == "sse" {
+    raise fail(
+      "\{source}: server '\{name}' uses the legacy HTTP+SSE transport, which mcpbox does not support; point 'url' at the server's Streamable HTTP endpoint instead (usually /mcp rather than /sse)",
+    )
+  }
   let url = json_string(obj, "url")
   let command = json_string(obj, "command")
   // `type`/`transport` disambiguates, but a definition with a `url` and no
   // command is unambiguous enough to infer.
   let use_http = match kind {
-    Some(k) => k == "http" || k == "streamable-http" || k == "sse"
+    Some(k) => k == "http" || k == "streamable-http"
     None => url is Some(_) && command is None
   }
   if use_http {
@@ -507,7 +516,9 @@ pub async fn load_servers() -> Array[Server] raise McpError {
     let text = @fs.read_file(path).text() catch {
       e => raise fail("cannot read \{path}: \{e.to_string()}")
     }
-    let document = parse_jsonc(text)
+    let document = parse_jsonc(text) catch {
+      e => raise fail("\{path}: \{error_text(e)}")
+    }
     let found = servers_from_document(document, candidate.key, path)
     for server in found {
       if !seen.contains(server.name) {
@@ -533,7 +544,9 @@ pub async fn config_files() -> Array[(String, Int32)] raise McpError {
     let text = @fs.read_file(path).text() catch {
       e => raise fail("cannot read \{path}: \{e.to_string()}")
     }
-    let document = parse_jsonc(text)
+    let document = parse_jsonc(text) catch {
+      e => raise fail("\{path}: \{error_text(e)}")
+    }
     let found = servers_from_document(document, candidate.key, path)
     out.push((path, found.length()))
   }

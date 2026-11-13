@@ -77,7 +77,13 @@ cat >"$work/mcpbox-musl-gcc" <<EOF
 # -idirafter keeps musl's libc headers ahead of glibc's while still making the
 # kernel UAPI headers reachable; -include limits.h supplies NAME_MAX, which
 # glibc's <unistd.h> provides transitively and musl's does not.
-common="-idirafter /usr/include -idirafter $multiarch -include limits.h"
+#
+# The instruction set baseline is pinned instead of inherited from the host
+# compiler. Newer Ubuntu images (such as GitHub's current ubuntu-latest)
+# configure GCC to target x86-64-v3 by default, which assumes AVX2/BMI2; a
+# binary built that way dies with SIGILL ("Illegal instruction") on any older
+# x86-64 CPU. The release artifact must keep running on those machines.
+common="-march=x86-64 -mtune=generic -idirafter /usr/include -idirafter $multiarch -include limits.h"
 for arg in "\$@"; do
   if [ "\$arg" = "-c" ]; then
     # shellcheck disable=SC2086

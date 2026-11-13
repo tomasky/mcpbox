@@ -91,6 +91,25 @@ test "coerce_value keeps integers beyond Int32 as JSON numbers" {
 }
 
 ///|
+/// JSON forbids a leading `+` and leading zeros, so an accepted integer must
+/// be re-spelled canonically before it goes on the wire. `count=007` used to
+/// emit `{"count":007}`, which a strict server silently discarded.
+test "coerce_value canonicalizes integer spellings JSON rejects" {
+  let schema = @json.parse("{\"type\":\"integer\"}")
+  let cases : Array[(String, String)] = [
+    ("007", "7"),
+    ("-007", "-7"),
+    ("+007", "7"),
+    ("-0", "0"),
+  ]
+  for pair in cases {
+    let encoded = @mcpbox.coerce_value(pair.0, Some(schema)).stringify()
+    assert_eq(encoded, pair.1)
+    ignore(@json.parse(encoded))
+  }
+}
+
+///|
 /// Anything that is not a plain integer stays a string rather than being
 /// rounded or rejected, so a caller sees their own input echoed back.
 test "coerce_value leaves non-integers for an integer schema as strings" {
