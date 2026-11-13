@@ -130,24 +130,35 @@ test "parse_server reports a missing HTTP url" {
 }
 
 ///|
-/// A legacy HTTP+SSE definition is not silently treated as Streamable HTTP:
-/// the error names the server and says which URL to use instead.
-test "parse_server rejects the legacy sse transport with an actionable error" {
-  let message = try {
-    ignore(
-      parse_server(
-        "x",
-        parse_jsonc("{\"type\":\"sse\",\"url\":\"https://h/sse\"}"),
-        "mcp.json",
-      ),
-    )
-    "no error"
-  } catch {
-    McpError(text) => text
+/// A legacy HTTP+SSE definition keeps its own transport kind, so mcpbox opens
+/// the event stream instead of POSTing to the `sse` URL as if it were
+/// Streamable HTTP.
+test "parse_server reads the legacy sse transport" {
+  let server = parse_server(
+    "x",
+    parse_jsonc(
+      "{\"type\":\"sse\",\"url\":\"https://h/sse\",\"headers\":{\"Authorization\":\"Bearer t\"}}",
+    ),
+    "mcp.json",
+  )
+  match server.kind {
+    Sse(spec) => {
+      assert_eq(spec.url, "https://h/sse")
+      assert_eq(spec.headers.get("Authorization"), Some("Bearer t"))
+    }
+    _ => abort("expected an sse server")
   }
-  assert_true(message.contains("legacy HTTP+SSE"))
-  assert_true(message.contains("mcp.json"))
-  assert_true(message.contains("Streamable HTTP"))
+}
+
+///|
+test "parse_server requires a url for sse" {
+  let failed = try {
+    ignore(parse_server("x", parse_jsonc("{\"type\":\"sse\"}"), "mcp.json"))
+    false
+  } catch {
+    _ => true
+  }
+  assert_true(failed)
 }
 
 ///|

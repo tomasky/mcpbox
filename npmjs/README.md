@@ -13,8 +13,8 @@ mcpbox call adhoc.echo --stdio "python3 echo_server.py" name=hi count=5
 
 `mcpbox` discovers the MCP servers you already have configured — in `mcpbox`
 files, Cursor, Claude Code/Desktop, Windsurf or VS Code — connects to them over
-stdio or Streamable HTTP, and lists or calls their tools from a shell, a script
-or an agent. One process, no daemon, no background state.
+stdio, Streamable HTTP or the legacy HTTP+SSE transport, and lists or calls
+their tools from a shell, a script or an agent. One process, no daemon, no background state.
 
 ## Usage
 
@@ -85,7 +85,7 @@ mcpbox call --http-url https://mcp.context7.com/mcp resolve-library-id \
 mcpbox call adhoc.echo --stdio "python3 echo_server.py" name=hi count=5
 ```
 
-Both transports honour `--timeout <seconds>` (default `30`), which applies to
+All transports honour `--timeout <seconds>` (default `30`), which applies to
 each request, including the `initialize` handshake. Fractional seconds are
 allowed (`--timeout 0.5`).
 
@@ -95,6 +95,10 @@ same-origin redirects with the standard 301/302/303/307/308 method rules — a
 session-terminating `DELETE` keeps its method across a 301. `text/event-stream`
 bodies are decoded event by event, so notifications before the answer are not
 concatenated into invalid JSON.
+
+The legacy HTTP+SSE transport is selected with `"type": "sse"` in the config.
+mcpbox opens the `GET` event stream, waits for its `endpoint` event, and POSTs
+messages there; responses are read from the same stream.
 
 ### Inspecting configuration
 

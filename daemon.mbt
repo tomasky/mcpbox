@@ -320,6 +320,11 @@ fn daemon_work(operation : String, server : Server, opts : Options) -> Json {
         "url": Json::string(spec.url),
         "headers": daemon_map_json(spec.headers),
       })
+    Sse(spec) =>
+      Json::object({
+        "url": Json::string(spec.url),
+        "headers": daemon_map_json(spec.headers),
+      })
   }
   Json::object({
     "op": Json::string(operation),
@@ -348,6 +353,11 @@ fn daemon_decode_server(request : Json) -> Server raise McpError {
     }
     "http" =>
       ServerKind::Http({
+        url: daemon_string(spec, "url"),
+        headers: daemon_string_map(daemon_field(spec, "headers")),
+      })
+    "sse" =>
+      ServerKind::Sse({
         url: daemon_string(spec, "url"),
         headers: daemon_string_map(daemon_field(spec, "headers")),
       })

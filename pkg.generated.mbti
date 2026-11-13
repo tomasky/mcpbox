@@ -166,6 +166,7 @@ pub fn ServerInfo::to_repr(Self) -> @debug.Repr
 pub(all) enum ServerKind {
   Stdio(StdioSpec)
   Http(HttpSpec)
+  Sse(SseSpec)
 }
 pub fn ServerKind::to_repr(Self) -> @debug.Repr
 
@@ -176,6 +177,13 @@ pub async fn Session::call_tool(Self, String, @json.Json, Int32) -> CallResult
 pub async fn Session::list_tools(Self, Int32) -> Array[Tool]
 pub fn Session::name(Self) -> String
 pub fn Session::server_info(Self) -> ServerInfo
+
+#derive(@debug.Debug)
+pub(all) struct SseSpec {
+  url : String
+  headers : Map[String, String]
+}
+pub fn SseSpec::to_repr(Self) -> @debug.Repr
 
 #derive(@debug.Debug)
 pub(all) struct StdioSpec {

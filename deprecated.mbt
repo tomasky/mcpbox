@@ -10,6 +10,9 @@ pub extend StdioSpec with @debug.Debug::{to_repr}
 pub extend HttpSpec with @debug.Debug::{to_repr}
 
 ///|
+pub extend SseSpec with @debug.Debug::{to_repr}
+
+///|
 pub extend ServerKind with @debug.Debug::{to_repr}
 
 ///|

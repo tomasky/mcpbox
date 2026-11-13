@@ -425,17 +425,23 @@ fn parse_server(
         _ => None
       }
   }
-  // The pre-2025 HTTP+SSE transport (GET a stream, POST to an endpoint event)
-  // is a different protocol from Streamable HTTP. Treating an `sse` server as
-  // Streamable HTTP only produced a confusing 405/404 at connect time, so say
-  // what is wrong and what to change instead.
-  if kind is Some(transport) && transport == "sse" {
-    raise fail(
-      "\{source}: server '\{name}' uses the legacy HTTP+SSE transport, which mcpbox does not support; point 'url' at the server's Streamable HTTP endpoint instead (usually /mcp rather than /sse)",
-    )
-  }
   let url = json_string(obj, "url")
   let command = json_string(obj, "command")
+  // The pre-2025 HTTP+SSE transport (GET a stream, POST to the endpoint named
+  // by its `endpoint` event) is a different protocol from Streamable HTTP.
+  // Configs mark it as `sse`; it has to be parsed into its own kind rather
+  // than being mistaken for a POST endpoint.
+  if kind is Some(transport) && transport == "sse" {
+    match url {
+      Some(url) =>
+        return {
+          name,
+          kind: Sse({ url, headers: json_string_map(obj, "headers"), }),
+          note: json_string(obj, "description").unwrap_or(source),
+        }
+      None => raise fail("\{source}: server '\{name}' is SSE but has no 'url'")
+    }
+  }
   // `type`/`transport` disambiguates, but a definition with a `url` and no
   // command is unambiguous enough to infer.
   let use_http = match kind {

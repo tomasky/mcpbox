@@ -1,6 +1,7 @@
 ///|
 /// The MCP client itself: one `Session` per connected server, speaking
-/// JSON-RPC over either a stdio child process or a Streamable HTTP endpoint.
+/// JSON-RPC over a stdio child process, a Streamable HTTP endpoint, or the
+/// legacy HTTP+SSE transport.
 ///
 /// A session is created with `with_server`, which owns the transport for the
 /// lifetime of the callback. That keeps process cleanup and HTTP session
@@ -25,6 +26,7 @@ pub struct Session {
 priv enum Link {
   Stdio(StdioLink)
   Http(HttpLink)
+  Sse(SseLink)
 }
 
 ///|
@@ -42,6 +44,17 @@ priv struct HttpLink {
   url : String
   headers : Map[String, String]
   mut session_id : String?
+}
+
+///|
+/// A legacy HTTP+SSE connection: the long-lived `GET` stream, the endpoint its
+/// `endpoint` event named for `POST`ed messages, and the static headers to send
+/// with both.
+priv struct SseLink {
+  url : String
+  headers : Map[String, String]
+  client : @http.Client
+  mut endpoint : String
 }
 
 ///|
@@ -79,6 +92,7 @@ pub async fn with_server(
   match server.kind {
     Stdio(spec) => with_stdio_session(server.name, spec, timeout_ms, f)
     Http(spec) => with_http_session(server.name, spec, timeout_ms, f)
+    Sse(spec) => with_sse_session(server.name, spec, timeout_ms, f)
   }
 }
 
@@ -174,6 +188,32 @@ async fn with_http_session(
 }
 
 ///|
+/// Connect over the legacy HTTP+SSE transport: open the event stream, wait for
+/// the `endpoint` event, then let the session POST messages and read their
+/// responses from the stream. Closing the session closes the stream.
+async fn with_sse_session(
+  name : String,
+  spec : SseSpec,
+  timeout_ms : Int32,
+  f : async (Session) -> Unit raise Error,
+) -> Unit raise Error {
+  let link = sse_connect(spec.url, spec.headers, name, timeout_ms)
+  let session = Session::connect(name, Link::Sse(link))
+  let outcome : Result[Unit, Error] = try {
+    session.initialize(timeout_ms)
+    f(session)
+    Ok(())
+  } catch {
+    error => Err(error)
+  }
+  session.close()
+  match outcome {
+    Ok(_) => ()
+    Err(error) => raise error
+  }
+}
+
+///|
 /// A session that outlives the call that created it, for the resident daemon.
 ///
 /// `with_server` ties a session to a callback so cleanup is automatic. The
@@ -206,6 +246,24 @@ pub async fn open_live_session(
   inherit_env~ : Bool = true,
 ) -> LiveSession raise Error {
   match server.kind {
+    Sse(spec) => {
+      let link = sse_connect(spec.url, spec.headers, server.name, timeout_ms)
+      let session = Session::connect(server.name, Link::Sse(link))
+      let outcome : Result[Unit, Error] = try {
+        session.initialize(timeout_ms)
+        Ok(())
+      } catch {
+        error => Err(error)
+      }
+      match outcome {
+        Ok(_) => ()
+        Err(error) => {
+          session.close()
+          raise error
+        }
+      }
+      { session, pid: None, closed: false, }
+    }
     Http(spec) => {
       let link = { url: spec.url, headers: spec.headers, session_id: None, }
       let session = Session::connect(server.name, Link::Http(link))
@@ -293,7 +351,7 @@ pub async fn LiveSession::close(self : LiveSession) -> Unit {
   self.session.close()
   match self.session.link {
     Stdio(link) => link.stdout.close()
-    Http(_) => ()
+    Http(_) | Sse(_) => ()
   }
   match self.pid {
     Some(pid) => {
@@ -424,6 +482,7 @@ async fn Session::request(
       outcome.unwrap()
     }
     Http(link) => http_request(link, message, id, self.name, timeout_ms)
+    Sse(link) => sse_request(link, message, id, self.name, timeout_ms)
   }
 }
 
@@ -439,6 +498,7 @@ async fn Session::notify(
   let message = rpc_notification(rpc_method, params)
   match self.link {
     Stdio(link) => write_line(link, message, self.name, timeout_ms)
+    Sse(link) => sse_post(link, message, self.name, timeout_ms)
     Http(link) => {
       let (code, body) = http_exchange(
         link,
@@ -541,6 +601,9 @@ async fn Session::close(self : Session) -> Unit {
             _ => ()
           }
       }
+    // Legacy SSE has no session-termination request: closing the event stream
+    // is the shutdown signal.
+    Sse(link) => link.client.close()
   }
 }
 
@@ -1161,5 +1224,289 @@ fn find_response(
           }
         _ => None
       }
+  }
+}
+
+///|
+/// Open the legacy HTTP+SSE stream and wait for the `endpoint` event that
+/// names where messages are POSTed.
+async fn sse_connect(
+  url : String,
+  headers : Map[String, String],
+  name : String,
+  timeout_ms : Int32,
+) -> SseLink raise Error {
+  let (origin, path) = split_url(url)
+  let client = @http.Client::Client(origin)
+  let request_headers : Map[@http.CaseInsensitiveString, String] = Map([])
+  request_headers[@http.CaseInsensitiveString("accept")] = "text/event-stream"
+  for entry in headers {
+    let lower = entry.0.to_lower()
+    if lower == "accept" ||
+      lower == "accept-encoding" ||
+      lower == "content-length" ||
+      lower == "content-type" {
+      continue
+    }
+    request_headers[@http.CaseInsensitiveString(entry.0)] = entry.1
+  }
+  let response = @async.with_timeout(
+    timeout_ms,
+    () => {
+      client
+      ..request(@http.Get, path, extra_headers=request_headers)
+      .end_request()
+    },
+    error=fail(
+      "timed out after \{timeout_ms}ms opening the event stream from '\{name}'",
+    ),
+  ) catch {
+    e => {
+      client.close()
+      raise fail(
+        "cannot open the event stream from '\{name}': \{error_text(e)}",
+      )
+    }
+  }
+  if response.code != 200 {
+    client.close()
+    raise fail(
+      "'\{name}' returned HTTP \{response.code} for the SSE stream instead of 200 text/event-stream",
+    )
+  }
+  match response.headers.get(@http.CaseInsensitiveString("content-type")) {
+    Some(content_type) if !content_type.to_lower().contains("text/event-stream") => {
+      client.close()
+      raise fail(
+        "'\{name}' returned '\{content_type}' instead of text/event-stream; check whether the URL is a Streamable HTTP endpoint",
+      )
+    }
+    _ => ()
+  }
+  let link : SseLink = { url, headers, client, endpoint: "", }
+  let endpoint : Result[String, Error] = try {
+    let mut found : String? = None
+    while found is None {
+      let (event_type, data) = read_sse_event(link, name, timeout_ms)
+      if event_type == "endpoint" {
+        found = Some(data)
+      }
+    }
+    Ok(found.unwrap())
+  } catch {
+    error => Err(error)
+  }
+  match endpoint {
+    Ok(data) => {
+      if data.length() == 0 {
+        client.close()
+        raise fail("'\{name}' sent an empty SSE endpoint event")
+      }
+      let resolved : Result[String, Error] = Ok(
+        resolve_sse_endpoint(url, data, name),
+      ) catch {
+        error => Err(error)
+      }
+      match resolved {
+        Ok(endpoint) => {
+          link.endpoint = endpoint
+          link
+        }
+        Err(error) => {
+          client.close()
+          raise error
+        }
+      }
+    }
+    Err(error) => {
+      client.close()
+      raise error
+    }
+  }
+}
+
+///|
+/// Read one complete server-sent event, skipping comments and other fields
+/// such as `id:` and `retry:`. Returns the event name (`message` when the
+/// stream omits it) and its joined data lines.
+async fn read_sse_event(
+  link : SseLink,
+  name : String,
+  timeout_ms : Int32,
+) -> (String, String) raise Error {
+  let mut event_type = ""
+  let data = StringBuilder()
+  let mut has_data = false
+  while true {
+    let line = @async.with_timeout(
+      timeout_ms,
+      () => link.client.read_until("\n"),
+      error=fail("timed out after \{timeout_ms}ms waiting for '\{name}'"),
+    ) catch {
+      e => raise fail("cannot read from '\{name}': \{error_text(e)}")
+    }
+    let raw = match line {
+      None => raise fail("'\{name}' closed the event stream")
+      Some(text) => text
+    }
+    let text = raw.trim().to_owned()
+    if text.length() == 0 {
+      if has_data {
+        return (
+          if event_type.length() == 0 {
+            "message"
+          } else {
+            event_type
+          },
+          data.to_string(),
+        )
+      }
+      continue
+    }
+    if text.has_prefix(":") {
+      continue
+    }
+    if text.has_prefix("event:") {
+      event_type = text[6:].trim().to_owned()
+    } else if text.has_prefix("data:") {
+      if has_data {
+        data.write_string("\n")
+      }
+      data.write_string(text[5:].trim().to_owned())
+      has_data = true
+    }
+  }
+  ("", "")
+}
+
+///|
+/// Resolve the `endpoint` event against the stream URL and keep it on the same
+/// origin, so configured headers are never forwarded to a third-party host.
+fn resolve_sse_endpoint(
+  base : String,
+  data : String,
+  name : String,
+) -> String raise McpError {
+  let endpoint = resolve_redirect_url(base, data)
+  if url_origin(endpoint) != url_origin(base) {
+    raise fail(
+      "'\{name}' sent an SSE endpoint on another origin (\{endpoint}); refusing to forward messages there",
+    )
+  }
+  endpoint
+}
+
+///|
+/// POST one JSON-RPC message to the endpoint named by the SSE stream.
+async fn sse_post(
+  link : SseLink,
+  message : Json,
+  name : String,
+  timeout_ms : Int32,
+) -> Unit raise Error {
+  let post : HttpLink = {
+    url: link.endpoint,
+    headers: link.headers,
+    session_id: None,
+  }
+  let (code, body) = http_exchange(
+    post,
+    @http.Post,
+    link.endpoint,
+    message.stringify(),
+    name,
+    timeout_ms,
+  )
+  if code >= 300 {
+    raise fail("'\{name}' rejected a message with HTTP \{code}: \{body}")
+  }
+}
+
+///|
+/// Send a request over the SSE transport: POST it, then read the event stream
+/// until its response arrives.
+async fn sse_request(
+  link : SseLink,
+  message : Json,
+  id : Int32,
+  name : String,
+  timeout_ms : Int32,
+) -> Json raise Error {
+  sse_post(link, message, name, timeout_ms)
+  sse_await_response(link, id, name, timeout_ms)
+}
+
+///|
+/// Read events until the response to `id` arrives, answering server requests
+/// and skipping notifications. A late `endpoint` event updates the POST URL.
+async fn sse_await_response(
+  link : SseLink,
+  id : Int32,
+  name : String,
+  timeout_ms : Int32,
+) -> Json raise Error {
+  while true {
+    let (event_type, data) = read_sse_event(link, name, timeout_ms)
+    if event_type == "endpoint" {
+      if data.length() == 0 {
+        raise fail("'\{name}' sent an empty SSE endpoint event")
+      }
+      link.endpoint = resolve_sse_endpoint(link.url, data, name)
+      continue
+    }
+    if data.length() == 0 {
+      continue
+    }
+    let json = @json.parse(data) catch {
+      e => raise fail("'\{name}' sent invalid JSON: \{e.to_string()}")
+    }
+    answer_sse_server_requests(link, json, name, timeout_ms)
+    match find_response(json, id) {
+      Some(Ok(result)) => return result
+      Some(Err(error)) => raise fail("\{name}: \{error.message}")
+      None => ()
+    }
+  }
+  Json::null()
+}
+
+///|
+/// Answer server-initiated requests carried by an SSE event. Batches are
+/// walked element by element.
+async fn answer_sse_server_requests(
+  link : SseLink,
+  json : Json,
+  name : String,
+  timeout_ms : Int32,
+) -> Unit raise Error {
+  match json {
+    Array(items) =>
+      for item in items {
+        answer_sse_server_request(link, item, name, timeout_ms)
+      }
+    _ => answer_sse_server_request(link, json, name, timeout_ms)
+  }
+}
+
+///|
+async fn answer_sse_server_request(
+  link : SseLink,
+  json : Json,
+  name : String,
+  timeout_ms : Int32,
+) -> Unit raise Error {
+  match decode_rpc_message(json) {
+    Some(ServerRequest(server_id, method_name, _)) =>
+      sse_post(
+        link,
+        rpc_error_response(
+          server_id,
+          -32601,
+          "mcpbox does not implement '\{method_name}'",
+        ),
+        name,
+        timeout_ms,
+      )
+    _ => ()
   }
 }

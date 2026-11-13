@@ -29,11 +29,22 @@ pub(all) struct HttpSpec {
 }
 
 ///|
+/// A legacy HTTP+SSE endpoint: a `GET` event stream whose `endpoint` event
+/// names the URL that JSON-RPC messages are `POST`ed to. This is the transport
+/// from before Streamable HTTP and is still used by older servers.
+#derive(Debug)
+pub(all) struct SseSpec {
+  url : String
+  headers : Map[String, String]
+}
+
+///|
 /// The transport half of a server definition.
 #derive(Debug)
 pub(all) enum ServerKind {
   Stdio(StdioSpec)
   Http(HttpSpec)
+  Sse(SseSpec)
 }
 
 ///|

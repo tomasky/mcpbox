@@ -76,6 +76,42 @@ grep -q "delete:/current" "$MARKER" || {
 }
 
 echo
+echo "== legacy HTTP+SSE transport =="
+SSE_PORT="${MCPBOX_SSE_PORT:-8767}"
+SSE_LOG="$(mktemp)"
+SSE_CONFIG="$(mktemp)"
+SSE_MARKER="$(mktemp)"
+python3 tests/fixtures/sse_server.py "$SSE_PORT" "$SSE_MARKER" >"$SSE_LOG" 2>&1 &
+SSE_SERVER=$!
+trap 'kill "$SERVER" "$SSE_SERVER" 2>/dev/null || true; rm -f "$MARKER" "$SERVER_LOG" "$CONFIG" "$SSE_LOG" "$SSE_CONFIG" "$SSE_MARKER"' EXIT
+cat >"$SSE_CONFIG" <<JSON
+{
+  "mcpServers": {
+    "legacy": {"type": "sse", "url": "http://127.0.0.1:$SSE_PORT/sse"}
+  }
+}
+JSON
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if python3 -c "import socket,sys; socket.create_connection(('127.0.0.1', $SSE_PORT), 0.2).close()" 2>/dev/null; then
+    break
+  fi
+  sleep 0.2
+done
+MCPBOX_CONFIG="$SSE_CONFIG" "$BIN" list legacy --brief --quiet | grep -q "legacy"
+SSE_CALL="$(MCPBOX_CONFIG="$SSE_CONFIG" "$BIN" call legacy.echo name=sse --quiet)"
+printf '%s\n' "$SSE_CALL" | grep -q '"name": "sse"' || {
+  echo "error: legacy SSE tool call returned: $SSE_CALL" >&2
+  cat "$SSE_LOG" >&2
+  exit 1
+}
+# A server-initiated request on the stream must be answered, not ignored.
+grep -q "srv-1" "$SSE_MARKER" || {
+  echo "error: server request over SSE was not answered" >&2
+  cat "$SSE_LOG" >&2
+  exit 1
+}
+
+echo
 echo "== config filters =="
 FILTERED="$(MCPBOX_CONFIG=" $CONFIG " "$BIN" config --json 'al*')"
 printf '%s\n' "$FILTERED" | grep -q '"name": "alpha"' || {

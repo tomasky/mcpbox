@@ -75,9 +75,9 @@ mcpbox call adhoc.echo --stdio "python3 echo_server.py" name=hi count=5
   default is meant to be read.
 - **Real exit codes.** A failed call exits non-zero, so a script or an agent can
   tell the difference.
-- **Two transports.** stdio child processes and Streamable HTTP, including
-  `text/event-stream` responses, session ids, gzip decoding, and same-origin
-  redirects that keep POST and DELETE semantics.
+- **Three transports.** stdio child processes, Streamable HTTP (session ids,
+  gzip decoding, same-origin redirects that keep POST and DELETE semantics),
+  and the legacy HTTP+SSE transport.
 
 ## Commands
 
@@ -165,6 +165,10 @@ A minimal `mcpbox.json`:
   }
 }
 ```
+
+A legacy HTTP+SSE server uses `"type": "sse"` and its `/sse` URL; mcpbox opens
+the event stream and POSTs messages to the endpoint it announces. Streamable
+HTTP servers use `"url"` (with or without `"type": "http"`).
 
 Files are read in precedence order, with the first definition of a name winning.
 `MCPBOX_CONFIG` is trimmed and a leading `~` is expanded, so a quoted

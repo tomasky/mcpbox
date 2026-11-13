@@ -300,6 +300,7 @@ pub fn transport_label(server : Server) -> String {
   match server.kind {
     Stdio(_) => "stdio"
     Http(_) => "http"
+    Sse(_) => "sse"
   }
 }
 
@@ -314,6 +315,7 @@ pub fn transport_target(server : Server) -> String {
         spec.command + " " + spec.args.join(" ")
       }
     Http(spec) => spec.url
+    Sse(spec) => spec.url
   }
 }
 
@@ -345,7 +347,7 @@ pub fn server_to_json(server : Server) -> Json {
       if spec.cwd.length() > 0 {
         fields["cwd"] = Json::string(spec.cwd)
       }
-    Http(_) => ()
+    Http(_) | Sse(_) => ()
   }
   Json::object(fields)
 }
