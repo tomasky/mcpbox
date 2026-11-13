@@ -74,6 +74,7 @@ server output; do not print or share them without reviewing/redacting secrets.
 
 ```sh
 mcpbox list --http-url https://example.com/mcp
+mcpbox list --sse-url http://localhost:3000/sse
 mcpbox list --stdio "python3 /absolute/path/server.py"
 mcpbox call adhoc.echo --stdio "python3 /absolute/path/server.py" name=hello
 ```

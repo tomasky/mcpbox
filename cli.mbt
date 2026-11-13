@@ -15,6 +15,7 @@ priv struct Options {
   mut help : Bool
   mut timeout_ms : Int32
   mut http_url : String?
+  mut sse_url : String?
   mut stdio : String?
   positional : Array[String]
 }
@@ -126,6 +127,7 @@ fn parse_options(args : Array[String]) -> Options raise McpError {
     help: false,
     timeout_ms: 30000,
     http_url: None,
+    sse_url: None,
     stdio: None,
     positional: [],
   }
@@ -178,6 +180,15 @@ fn parse_options(args : Array[String]) -> Options raise McpError {
     } else if arg.has_prefix("--http-url=") {
       opts.http_url = Some(arg[11:].to_owned())
       i += 1
+    } else if arg == "--sse-url" {
+      if i + 1 >= args.length() {
+        raise fail("--sse-url needs a URL")
+      }
+      opts.sse_url = Some(args[i + 1])
+      i += 2
+    } else if arg.has_prefix("--sse-url=") {
+      opts.sse_url = Some(arg[10:].to_owned())
+      i += 1
     } else if arg == "--stdio" {
       if i + 1 >= args.length() {
         raise fail("--stdio needs a command")
@@ -201,10 +212,37 @@ fn parse_options(args : Array[String]) -> Options raise McpError {
 }
 
 ///|
-/// The ad-hoc server described by `--http-url` or `--stdio`, if any.
+/// The ad-hoc server described by `--http-url`, `--sse-url`, or `--stdio`, if
+/// any.
 fn adhoc_server(opts : Options) -> Server? raise McpError {
-  if opts.http_url is Some(_) && opts.stdio is Some(_) {
-    raise fail("--http-url and --stdio describe different servers; pick one")
+  let mut chosen = 0
+  if opts.http_url is Some(_) {
+    chosen += 1
+  }
+  if opts.sse_url is Some(_) {
+    chosen += 1
+  }
+  if opts.stdio is Some(_) {
+    chosen += 1
+  }
+  if chosen > 1 {
+    raise fail(
+      "--http-url, --sse-url and --stdio describe different servers; pick one",
+    )
+  }
+  match opts.sse_url {
+    Some(url) => {
+      let can_connect = url.has_prefix("http://") || url.has_prefix("https://")
+      if !can_connect {
+        raise fail("'\{url}' should start with http:// or https://")
+      }
+      return Some({
+        name: "adhoc",
+        kind: Sse({ url, headers: Map([]), }),
+        note: "ad-hoc --sse-url",
+      })
+    }
+    None => ()
   }
   match opts.http_url {
     Some(url) => {
@@ -676,6 +714,9 @@ pub fn help_text() -> String {
   )
   out.write_string(
     "  --http-url <url>       call an ad-hoc Streamable HTTP server\n",
+  )
+  out.write_string(
+    "  --sse-url <url>        call an ad-hoc legacy HTTP+SSE server\n",
   )
   out.write_string(
     "  --stdio <command>      call an ad-hoc stdio server, e.g. \"npx -y x\"\n",

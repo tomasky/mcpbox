@@ -49,13 +49,20 @@ priv struct HttpLink {
 ///|
 /// A legacy HTTP+SSE connection: the long-lived `GET` stream, the endpoint its
 /// `endpoint` event named for `POST`ed messages, and the static headers to send
-/// with both.
+/// with both. `last_event_id` is replayed as `Last-Event-ID` after a drop so a
+/// server that supports resumption can resend missed events.
 priv struct SseLink {
   url : String
   headers : Map[String, String]
-  client : @http.Client
+  mut client : @http.Client
   mut endpoint : String
+  mut last_event_id : String
 }
+
+///|
+/// How many times one pending request may reconnect after the event stream
+/// drops before giving up. The request itself is never re-sent.
+const SSE_MAX_RECONNECTS : Int32 = 3
 
 ///|
 /// The server's name, for messages.
@@ -1228,14 +1235,15 @@ fn find_response(
 }
 
 ///|
-/// Open the legacy HTTP+SSE stream and wait for the `endpoint` event that
-/// names where messages are POSTed.
-async fn sse_connect(
+/// Open the legacy HTTP+SSE stream: a GET that must answer with an event
+/// stream. The caller then waits for the `endpoint` event.
+async fn sse_open(
   url : String,
   headers : Map[String, String],
+  last_event_id : String,
   name : String,
   timeout_ms : Int32,
-) -> SseLink raise Error {
+) -> @http.Client raise Error {
   let (origin, path) = split_url(url)
   let client = @http.Client::Client(origin)
   let request_headers : Map[@http.CaseInsensitiveString, String] = Map([])
@@ -1249,6 +1257,9 @@ async fn sse_connect(
       continue
     }
     request_headers[@http.CaseInsensitiveString(entry.0)] = entry.1
+  }
+  if last_event_id.length() > 0 {
+    request_headers[@http.CaseInsensitiveString("last-event-id")] = last_event_id
   }
   let response = @async.with_timeout(
     timeout_ms,
@@ -1283,58 +1294,97 @@ async fn sse_connect(
     }
     _ => ()
   }
-  let link : SseLink = { url, headers, client, endpoint: "", }
-  let endpoint : Result[String, Error] = try {
-    let mut found : String? = None
-    while found is None {
-      let (event_type, data) = read_sse_event(link, name, timeout_ms)
-      if event_type == "endpoint" {
-        found = Some(data)
-      }
+  client
+}
+
+///|
+/// Wait for the `endpoint` event that names where to POST messages. Servers
+/// repeat it on every new stream, so reconnecting refreshes the endpoint.
+async fn sse_await_endpoint(
+  link : SseLink,
+  name : String,
+  timeout_ms : Int32,
+) -> Unit raise Error {
+  while true {
+    match read_sse_event(link, name, timeout_ms) {
+      None =>
+        raise fail(
+          "'\{name}' closed the event stream before sending an endpoint",
+        )
+      Some((event_type, data)) =>
+        if event_type == "endpoint" {
+          if data.length() == 0 {
+            raise fail("'\{name}' sent an empty SSE endpoint event")
+          }
+          link.endpoint = resolve_sse_endpoint(link.url, data, name)
+          return
+        }
     }
-    Ok(found.unwrap())
+  }
+}
+
+///|
+async fn sse_connect(
+  url : String,
+  headers : Map[String, String],
+  name : String,
+  timeout_ms : Int32,
+) -> SseLink raise Error {
+  let client = sse_open(url, headers, "", name, timeout_ms)
+  let link : SseLink = {
+    url,
+    headers,
+    client,
+    endpoint: "",
+    last_event_id: "",
+  }
+  let opened : Result[Unit, Error] = try {
+    sse_await_endpoint(link, name, timeout_ms)
+    Ok(())
   } catch {
     error => Err(error)
   }
-  match endpoint {
-    Ok(data) => {
-      if data.length() == 0 {
-        client.close()
-        raise fail("'\{name}' sent an empty SSE endpoint event")
-      }
-      let resolved : Result[String, Error] = Ok(
-        resolve_sse_endpoint(url, data, name),
-      ) catch {
-        error => Err(error)
-      }
-      match resolved {
-        Ok(endpoint) => {
-          link.endpoint = endpoint
-          link
-        }
-        Err(error) => {
-          client.close()
-          raise error
-        }
-      }
-    }
+  match opened {
+    Ok(_) => link
     Err(error) => {
-      client.close()
+      link.client.close()
       raise error
     }
   }
 }
 
 ///|
-/// Read one complete server-sent event, skipping comments and other fields
-/// such as `id:` and `retry:`. Returns the event name (`message` when the
-/// stream omits it) and its joined data lines.
+/// Drop the dead stream, reopen it with `Last-Event-ID`, and refresh the
+/// endpoint. The pending request is not re-sent, so a server that never saw it
+/// cannot act on it twice.
+async fn sse_reconnect(
+  link : SseLink,
+  name : String,
+  timeout_ms : Int32,
+) -> Unit raise Error {
+  link.client.close()
+  link.client = sse_open(
+    link.url,
+    link.headers,
+    link.last_event_id,
+    name,
+    timeout_ms,
+  )
+  sse_await_endpoint(link, name, timeout_ms)
+}
+
+///|
+/// Read one complete server-sent event, skipping comments and `retry:` hints.
+/// Returns the event name (`message` when the stream omits it) and its joined
+/// data lines, or `None` once the stream closes. Event `id:`s are remembered so
+/// a reconnect can send `Last-Event-ID`.
 async fn read_sse_event(
   link : SseLink,
   name : String,
   timeout_ms : Int32,
-) -> (String, String) raise Error {
+) -> (String, String)? raise Error {
   let mut event_type = ""
+  let mut event_id : String? = None
   let data = StringBuilder()
   let mut has_data = false
   while true {
@@ -1346,20 +1396,22 @@ async fn read_sse_event(
       e => raise fail("cannot read from '\{name}': \{error_text(e)}")
     }
     let raw = match line {
-      None => raise fail("'\{name}' closed the event stream")
+      None => return None
       Some(text) => text
     }
     let text = raw.trim().to_owned()
     if text.length() == 0 {
       if has_data {
-        return (
-          if event_type.length() == 0 {
-            "message"
-          } else {
-            event_type
-          },
-          data.to_string(),
-        )
+        match event_id {
+          Some(id) => if id.length() > 0 { link.last_event_id = id }
+          None => ()
+        }
+        let resolved_type = if event_type.length() == 0 {
+          "message"
+        } else {
+          event_type
+        }
+        return Some((resolved_type, data.to_string()))
       }
       continue
     }
@@ -1374,9 +1426,14 @@ async fn read_sse_event(
       }
       data.write_string(text[5:].trim().to_owned())
       has_data = true
+    } else if text.has_prefix("id:") {
+      let id = text[3:].trim().to_owned()
+      if id.length() > 0 {
+        event_id = Some(id)
+      }
     }
   }
-  ("", "")
+  None
 }
 
 ///|
@@ -1439,32 +1496,48 @@ async fn sse_request(
 ///|
 /// Read events until the response to `id` arrives, answering server requests
 /// and skipping notifications. A late `endpoint` event updates the POST URL.
+/// When the stream closes, reconnect (bounded) and keep waiting for the same
+/// response; the request is not re-sent.
 async fn sse_await_response(
   link : SseLink,
   id : Int32,
   name : String,
   timeout_ms : Int32,
 ) -> Json raise Error {
+  let mut reconnects : Int32 = 0
   while true {
-    let (event_type, data) = read_sse_event(link, name, timeout_ms)
-    if event_type == "endpoint" {
-      if data.length() == 0 {
-        raise fail("'\{name}' sent an empty SSE endpoint event")
+    match read_sse_event(link, name, timeout_ms) {
+      None => {
+        if reconnects >= SSE_MAX_RECONNECTS {
+          raise fail(
+            "'\{name}' closed the event stream and \{SSE_MAX_RECONNECTS} reconnects did not restore it",
+          )
+        }
+        reconnects += 1
+        @async.sleep(200 * reconnects)
+        sse_reconnect(link, name, timeout_ms)
       }
-      link.endpoint = resolve_sse_endpoint(link.url, data, name)
-      continue
-    }
-    if data.length() == 0 {
-      continue
-    }
-    let json = @json.parse(data) catch {
-      e => raise fail("'\{name}' sent invalid JSON: \{e.to_string()}")
-    }
-    answer_sse_server_requests(link, json, name, timeout_ms)
-    match find_response(json, id) {
-      Some(Ok(result)) => return result
-      Some(Err(error)) => raise fail("\{name}: \{error.message}")
-      None => ()
+      Some((event_type, data)) => {
+        if event_type == "endpoint" {
+          if data.length() == 0 {
+            raise fail("'\{name}' sent an empty SSE endpoint event")
+          }
+          link.endpoint = resolve_sse_endpoint(link.url, data, name)
+          continue
+        }
+        if data.length() == 0 {
+          continue
+        }
+        let json = @json.parse(data) catch {
+          e => raise fail("'\{name}' sent invalid JSON: \{e.to_string()}")
+        }
+        answer_sse_server_requests(link, json, name, timeout_ms)
+        match find_response(json, id) {
+          Some(Ok(result)) => return result
+          Some(Err(error)) => raise fail("\{name}: \{error.message}")
+          None => ()
+        }
+      }
     }
   }
   Json::null()

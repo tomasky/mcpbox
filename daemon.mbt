@@ -196,10 +196,10 @@ async fn running_daemon() -> DaemonLocator? {
 /// service, but remain one-shot if none is running. Calls are never retried:
 /// a lost reply might mean a side-effecting tool already ran.
 ///
-/// An ad-hoc server (`--http-url` / `--stdio`) never uses the service. It is
-/// defined by this command line, not by a config file the daemon could share,
-/// and a long-lived session keyed on the name `adhoc` would keep a process
-/// alive that no config describes.
+/// An ad-hoc server (`--http-url`, `--sse-url`, or `--stdio`) never uses the
+/// service. It is defined by this command line, not by a config file the daemon
+/// could share, and a long-lived session keyed on the name `adhoc` would keep a
+/// process alive that no config describes.
 async fn daemon_for_command(opts : Options) -> DaemonLocator? raise Error {
   if adhoc_server(opts) is Some(_) {
     return None

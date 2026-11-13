@@ -11,6 +11,11 @@ The pre-Streamable-HTTP transport works differently from a POST endpoint:
 
 The fixture advertises one `echo` tool, so both tool discovery and calls can
 be checked without a real MCP implementation.
+
+`GET /sse?flaky=1` drops the stream once on `initialize` and once on
+`tools/list`, replaying each stashed response on the next stream. That makes
+the client reconnect mid-session, refresh the endpoint, and send
+`Last-Event-ID`.
 """
 
 import json
@@ -18,10 +23,15 @@ import queue
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
 SESSIONS = {}
 LOCK = threading.Lock()
 MARKER = sys.argv[2] if len(sys.argv) > 2 else ""
+SESSION_SEQ = 0
+# Responses whose stream was dropped, replayed on the next flaky stream.
+PENDING = []
+DROPPED = set()
 
 
 def record(line):
@@ -77,10 +87,14 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):
+        global SESSION_SEQ
         path = self.path.split("?", 1)[0]
         if path != "/sse":
             self.send_error(404, "not found")
             return
+
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        flaky = parse_qs(query).get("flaky", [""])[0] == "1"
 
         self.close_connection = True
         self.send_response(200)
@@ -89,29 +103,47 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
 
-        session_id = str(id(self))
         events = queue.Queue()
         with LOCK:
-            SESSIONS[session_id] = events
+            SESSION_SEQ += 1
+            session_id = f"session-{SESSION_SEQ}"
+            SESSIONS[session_id] = {"events": events, "flaky": flaky}
+        if flaky:
+            last_id = self.headers.get("Last-Event-ID", "")
+            record("stream:" + (last_id if last_id else "-"))
 
         def send_chunk(data):
             body = data.encode("utf-8")
             self.wfile.write(b"%x\r\n" % len(body) + body + b"\r\n")
             self.wfile.flush()
 
+        def send_message(payload):
+            rpc_id = json.loads(payload).get("id")
+            id_line = f"id: {rpc_id}\n" if isinstance(rpc_id, int) else ""
+            send_chunk("event: message\n" + id_line + "data: " + payload + "\n\n")
+
         try:
             send_chunk(
                 "event: endpoint\n"
                 f"data: /messages?sessionId={session_id}\n\n"
             )
+            if flaky:
+                with LOCK:
+                    pending = list(PENDING)
+                    PENDING.clear()
+                for payload in pending:
+                    send_message(payload)
             while True:
                 try:
                     payload = events.get(timeout=0.2)
                 except queue.Empty:
                     continue
                 if payload is None:
+                    # End the chunked body cleanly so the client sees EOF.
+                    self.wfile.write(b"0\r\n\r\n")
+                    self.wfile.flush()
                     return
-                send_chunk("event: message\ndata: " + payload + "\n\n")
+                send_message(payload)
         except (BrokenPipeError, ConnectionResetError):
             return
         finally:
@@ -131,10 +163,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404, "not found")
             return
         with LOCK:
-            events = SESSIONS.get(session_id)
-        if events is None:
+            session = SESSIONS.get(session_id)
+        if session is None:
             self.send_error(404, "unknown session")
             return
+        events = session["events"]
 
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
@@ -154,7 +187,20 @@ class Handler(BaseHTTPRequestHandler):
             record("srv-1")
             return
         if message.get("id") is not None:
-            if message.get("method") == "tools/call":
+            method = message.get("method")
+            response = json.dumps(mcp_response(message))
+            drop = False
+            if session["flaky"] and method in ("initialize", "tools/list"):
+                global DROPPED
+                with LOCK:
+                    if method not in DROPPED:
+                        DROPPED.add(method)
+                        PENDING.append(response)
+                        drop = True
+            if drop:
+                events.put(None)
+                return
+            if method == "tools/call":
                 # A server-initiated request arriving before the response must
                 # be answered by the client instead of being dropped.
                 events.put(json.dumps({
@@ -162,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
                     "id": "srv-1",
                     "method": "ping",
                 }))
-            events.put(json.dumps(mcp_response(message)))
+            events.put(response)
 
     def log_message(self, *args):
         pass

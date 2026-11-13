@@ -81,6 +81,9 @@ mcpbox list --http-url https://mcp.context7.com/mcp
 mcpbox call --http-url https://mcp.context7.com/mcp resolve-library-id \
   query="React hooks docs"
 
+# legacy HTTP+SSE
+mcpbox list --sse-url http://localhost:3000/sse
+
 # stdio child process (the string is split like a shell)
 mcpbox call adhoc.echo --stdio "python3 echo_server.py" name=hi count=5
 ```
@@ -96,9 +99,11 @@ session-terminating `DELETE` keeps its method across a 301. `text/event-stream`
 bodies are decoded event by event, so notifications before the answer are not
 concatenated into invalid JSON.
 
-The legacy HTTP+SSE transport is selected with `"type": "sse"` in the config.
-mcpbox opens the `GET` event stream, waits for its `endpoint` event, and POSTs
-messages there; responses are read from the same stream.
+The legacy HTTP+SSE transport is selected with `"type": "sse"` in the config
+(or `--sse-url` ad hoc). mcpbox opens the `GET` event stream, waits for its
+`endpoint` event, and POSTs messages there; responses are read from the same
+stream. A dropped stream is reopened, and the replayed `Last-Event-ID` lets a
+server resume where the client stopped; the pending request is never re-sent.
 
 ### Inspecting configuration
 

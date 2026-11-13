@@ -55,6 +55,7 @@ Point it at a server you have not configured yet:
 
 ```sh
 mcpbox list --http-url https://mcp.context7.com/mcp
+mcpbox list --sse-url http://localhost:3000/sse
 mcpbox call adhoc.echo --stdio "python3 echo_server.py" name=hi count=5
 ```
 
@@ -77,7 +78,8 @@ mcpbox call adhoc.echo --stdio "python3 echo_server.py" name=hi count=5
   tell the difference.
 - **Three transports.** stdio child processes, Streamable HTTP (session ids,
   gzip decoding, same-origin redirects that keep POST and DELETE semantics),
-  and the legacy HTTP+SSE transport.
+  and the legacy HTTP+SSE transport, which reconnects a dropped event stream
+  and resumes with `Last-Event-ID`.
 
 ## Commands
 
@@ -93,7 +95,7 @@ mcpbox call adhoc.echo --stdio "python3 echo_server.py" name=hi count=5
 
 Useful flags: `--all`, `-b` / `--background`, `--no-docs`, `--quiet` / `-q`,
 `--json`, `--brief`, `--raw`, `--timeout <seconds>`,
-`--http-url <url>`, `--stdio "<command>"`. A `--` stops option parsing so
+`--http-url <url>`, `--sse-url <url>`, `--stdio "<command>"`. A `--` stops option parsing so
 option-like words after it remain tool arguments. `config` filters match name
 substrings, with `*` matching any sequence and `?` one character; repeat the
 filter to match any of several names.
@@ -167,7 +169,9 @@ A minimal `mcpbox.json`:
 ```
 
 A legacy HTTP+SSE server uses `"type": "sse"` and its `/sse` URL; mcpbox opens
-the event stream and POSTs messages to the endpoint it announces. Streamable
+the event stream and POSTs messages to the endpoint it announces. If the stream
+drops while a response is pending, mcpbox reopens it (bounded), refreshes the
+endpoint, and sends `Last-Event-ID`, without re-sending the request. Streamable
 HTTP servers use `"url"` (with or without `"type": "http"`).
 
 Files are read in precedence order, with the first definition of a name winning.

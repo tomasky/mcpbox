@@ -111,6 +111,34 @@ grep -q "srv-1" "$SSE_MARKER" || {
   exit 1
 }
 
+# The same server through the ad-hoc flag, without a config file.
+"$BIN" list --sse-url "http://127.0.0.1:$SSE_PORT/sse" --json |
+  grep -q '"name": "echo"'
+"$BIN" call adhoc.echo --sse-url "http://127.0.0.1:$SSE_PORT/sse" name=adhoc \
+  --quiet | grep -q '"name": "adhoc"'
+
+# `?flaky=1` drops the stream during initialize and during tools/list. The
+# client must reconnect, pick up the new endpoint, and replay the pending
+# response; the second reconnect must carry the last event id it saw.
+cat >"$SSE_CONFIG" <<JSON
+{
+  "mcpServers": {
+    "flaky": {"type": "sse", "url": "http://127.0.0.1:$SSE_PORT/sse?flaky=1"}
+  }
+}
+JSON
+MCPBOX_CONFIG="$SSE_CONFIG" "$BIN" list flaky --json |
+  grep -q '"name": "echo"'
+# The initial stream plus one reconnect before any event id was seen; the last
+# reconnect must replay the id of the dropped tools/list stream.
+if [ "$(grep -c '^stream:' "$SSE_MARKER")" -ne 3 ] ||
+  [ "$(grep '^stream:' "$SSE_MARKER" | tail -n 1)" != "stream:1" ]; then
+  echo "error: SSE reconnect did not resend Last-Event-ID" >&2
+  cat "$SSE_MARKER" >&2
+  cat "$SSE_LOG" >&2
+  exit 1
+fi
+
 echo
 echo "== config filters =="
 FILTERED="$(MCPBOX_CONFIG=" $CONFIG " "$BIN" config --json 'al*')"
