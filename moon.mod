@@ -9,7 +9,7 @@
 
 name = "kupas/mcpbox"
 
-version = "0.1.9"
+version = "0.2.0"
 
 readme = "README.mbt.md"
 

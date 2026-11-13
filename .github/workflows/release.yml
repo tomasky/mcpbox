@@ -159,7 +159,7 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      # Same resolution the build jobs use, so a tag pushed as `v0.1.9` and a
+      # Same resolution the build jobs use, so a tag pushed as `v0.2.0` and a
       # `workflow_dispatch` with no tag both agree on the version being shipped.
       - name: Check the package version matches the release
         working-directory: npmjs
