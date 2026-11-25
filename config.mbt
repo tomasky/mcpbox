@@ -192,7 +192,7 @@ fn config_candidates() -> Array[Candidate] {
 /// Strip `//` and `/* */` comments from JSONC text, leaving string literals
 /// untouched.
 fn strip_jsonc_comments(text : String) -> String {
-  let out = StringBuilder(size_hint=text.length())
+  let out = StringBuilder(capacity=text.length().to_int())
   let chars = text.to_array()
   let n = chars.length()
   let mut i = 0
@@ -245,7 +245,7 @@ fn strip_jsonc_comments(text : String) -> String {
 /// Drop commas that sit directly before a closing brace or bracket, the other
 /// concession JSONC makes to hand-written config.
 fn strip_trailing_commas(text : String) -> String {
-  let out = StringBuilder(size_hint=text.length())
+  let out = StringBuilder(capacity=text.length().to_int())
   let chars = text.to_array()
   let n = chars.length()
   let mut i = 0
@@ -315,7 +315,7 @@ pub fn parse_jsonc(text : String) -> Json raise McpError {
 /// no fallback expands to the empty string rather than failing, so a missing
 /// optional token does not make the whole config unreadable.
 pub fn expand_env(text : String) -> String {
-  let out = StringBuilder(size_hint=text.length())
+  let out = StringBuilder(capacity=text.length().to_int())
   let chars = text.to_array()
   let n = chars.length()
   let mut i = 0

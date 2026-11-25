@@ -62,11 +62,14 @@ jobs:
       - name: Show toolchain
         run: moon version --all
 
+      # `perl` configures OpenSSL and `curl` fetches it, all inside
+      # scripts/build-linux-static.sh: a static binary cannot load the system
+      # OpenSSL, so the library is compiled for musl and linked in.
       - name: Install musl toolchain
         if: matrix.musl
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools perl curl
 
       # A fresh runner has an empty registry index, so dependencies
       # (moonbitlang/x, moonbitlang/async, ...) cannot be resolved until the
